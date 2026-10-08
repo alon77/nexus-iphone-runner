@@ -74,6 +74,8 @@ jobs:
         run: |
           npm install --global --silent appium@3.8.0
           appium driver install xcuitest@12.16.0
+          appium driver run xcuitest download-wda-sim --platform=ios --outdir="$RUN_DIR/wda"
+          echo "WDA_APP=$(find "$RUN_DIR/wda" -maxdepth 2 -name 'WebDriverAgentRunner-Runner.app' | head -1)" >> "$GITHUB_ENV"
           nohup appium --port 4723 --log-no-colors --log "$RUN_DIR/out/appium.log" > /dev/null 2>&1 &
           for attempt in $(seq 60); do curl -sf http://127.0.0.1:4723/status > /dev/null && exit 0; sleep 2; done
           echo "Appium never answered /status"; exit 1
