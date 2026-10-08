@@ -35,6 +35,7 @@ WEBVIEW_ATOM_WAIT_MS = 8_000
 MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
 COLD_SAFARI_READY_WAIT_S = 180
+SAFARI_SETTLED_S = 2.0
 TYPING_KEYS_PER_MINUTE = 600
 OSASCRIPT_TIMEOUT_S = 30
 POLL_S = 0.25
@@ -254,19 +255,27 @@ def _no_keyboard_detail(last: dict) -> str:
 
 
 def _page_state(phone: Phone) -> Optional[str]:
+    asked = time.monotonic()
+    state = phone.driver.execute_script(PAGE_READY_JS)
+    answer_s = time.monotonic() - asked
+    if state not in READY_STATES:
+        return f"page still {state}"
+    return f"Safari still settling ({answer_s:.1f}s per script)" if answer_s > SAFARI_SETTLED_S else None
+
+
+def _reason_or_none(check) -> Optional[str]:
     try:
-        state = phone.driver.execute_script(PAGE_READY_JS)
+        return check()
     except Exception as error:
         return f"page unreachable ({type(error).__name__})"
-    return None if state in READY_STATES else f"page still {state}"
 
 
 def _waited(check) -> Optional[str]:
     deadline = time.monotonic() + COLD_SAFARI_READY_WAIT_S
-    seen = check()
+    seen = _reason_or_none(check)
     while seen and time.monotonic() < deadline:
         time.sleep(POLL_S)
-        seen = check()
+        seen = _reason_or_none(check)
     return seen
 
 
