@@ -212,7 +212,6 @@ def _no_keyboard_detail(last: dict) -> str:
 
 def keyboard_preflight(phone: Phone) -> dict:
     phone.open("/")
-    phone.save_native_tree("first_page")
     phone.driver.execute_script(PROBE_INPUT_JS, PROBE_INPUT_ID)
     attempts = []
     for method in ("capabilities", "simulator_menu"):
@@ -223,4 +222,5 @@ def keyboard_preflight(phone: Phone) -> dict:
             phone.driver.execute_script(REMOVE_PROBE_JS, PROBE_INPUT_ID)
             return {"ok": True, "method": method, "detail": f"keyboard up via {method}", "attempts": attempts}
     phone.shot("preflight_no_keyboard")
+    phone.save_native_tree("preflight_failed")
     return {"ok": False, "detail": _no_keyboard_detail(attempts[-1]), "attempts": attempts}
