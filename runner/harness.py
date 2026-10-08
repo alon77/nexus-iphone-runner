@@ -15,7 +15,8 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
     expect(name, condition, detail)   one red/green line in results.json
 
 Appium never leaks into a spec. Once per session, before any spec, keyboard_preflight proves the software
-keyboard comes up; before each spec, clean_state wipes the site's cookies and storage.
+keyboard comes up; after the preflight and after each spec's result goes back, clean_state wipes the site's cookies
+and storage, so every spec starts clean and the wipe is never inside a timed run.
 """
 
 import subprocess
@@ -42,13 +43,13 @@ OSASCRIPT_TIMEOUT_S = 30
 POLL_S = 0.25
 NATIVE_CONTEXT = "NATIVE_APP"
 CSS_SELECTOR = "css selector"
-CLASS_NAME = "class name"
 IOS_CLASS_CHAIN = "-ios class chain"
+IOS_PREDICATE = "-ios predicate string"
+VISIBLE_KEYBOARD_PREDICATE = "type == 'XCUIElementTypeKeyboard' AND visible == 1"
 KEYBOARD_TYPE_COMMAND = "wda_keys"
 KEYBOARD_TYPE_ROUTE = ("POST", "/session/$sessionId/keys")
 CLOSE_BUTTONS_CHAIN = ('**/XCUIElementTypeButton[`name IN {"Close", "Not Now"} OR label IN {"Close", "Not Now"}`]')
 WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
-KEYBOARD_CLASS = "XCUIElementTypeKeyboard"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
 SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js")
@@ -189,8 +190,7 @@ class Phone:
 
     def keyboard_up(self) -> bool:
         with self._native():
-            keyboards = self.driver.find_elements(CLASS_NAME, KEYBOARD_CLASS)
-            return any(keyboard.is_displayed() for keyboard in keyboards)
+            return bool(self.driver.find_elements(IOS_PREDICATE, VISIBLE_KEYBOARD_PREDICATE))
 
     def wait_keyboard(self, *, up: bool) -> bool:
         deadline = time.monotonic() + KEYBOARD_WAIT_S
