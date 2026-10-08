@@ -34,7 +34,7 @@ WEBVIEW_CONNECT_TIMEOUT_MS = 60_000
 WEBVIEW_ATOM_WAIT_MS = 8_000
 MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
-PAGE_READY_WAIT_S = 30
+COLD_SAFARI_READY_WAIT_S = 180
 TYPING_KEYS_PER_MINUTE = 600
 OSASCRIPT_TIMEOUT_S = 30
 POLL_S = 0.25
@@ -262,7 +262,7 @@ def _page_state(phone: Phone) -> Optional[str]:
 
 
 def _waited(check) -> Optional[str]:
-    deadline = time.monotonic() + PAGE_READY_WAIT_S
+    deadline = time.monotonic() + COLD_SAFARI_READY_WAIT_S
     seen = check()
     while seen and time.monotonic() < deadline:
         time.sleep(POLL_S)
@@ -278,7 +278,7 @@ def _probe_missing(phone: Phone) -> Optional[str]:
 def _safari_not_open(phone: Phone, seen: str) -> dict:
     phone.shot("preflight_safari_not_open")
     phone.save_native_tree("preflight_failed")
-    return {"ok": False, "detail": f"Safari not open: {seen} after {PAGE_READY_WAIT_S}s", "attempts": []}
+    return {"ok": False, "detail": f"Safari not open: {seen} after {COLD_SAFARI_READY_WAIT_S}s", "attempts": []}
 
 
 def keyboard_preflight(phone: Phone) -> dict:
