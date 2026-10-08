@@ -14,6 +14,7 @@ import asyncio
 import hmac
 import os
 import ssl
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -99,17 +100,28 @@ async def _forward_websocket(request: web.Request, headers) -> web.WebSocketResp
         return downstream
 
 
+def _print_timing(request: web.Request, status: int, *, started: float, headers_at: float, sent: int):
+    finished = time.monotonic()
+    print(f"{time.strftime('%H:%M:%S')} {request.method} {request.path} {status} "
+          f"headers {(headers_at - started) * 1000:.0f}ms total {(finished - started) * 1000:.0f}ms {sent}B", flush=True)
+
+
 async def _forward_http(request: web.Request, headers) -> web.StreamResponse:
     route = request.app[ROUTE_KEY]
+    started = time.monotonic()
     body = await request.read() if request.body_exists else None
     async with request.app[SESSION_KEY].request(request.method, route.upstream + request.path_qs, headers=headers,
                                                 data=body, allow_redirects=False, ssl=_ssl_for(route)) as upstream:
+        headers_at = time.monotonic()
         response = web.StreamResponse(status=upstream.status, reason=upstream.reason,
                                       headers=_downstream_headers(upstream.headers))
         await response.prepare(request)
+        sent = 0
         async for chunk in upstream.content.iter_chunked(CHUNK_BYTES):
             await response.write(chunk)
+            sent += len(chunk)
         await response.write_eof()
+        _print_timing(request, upstream.status, started=started, headers_at=headers_at, sent=sent)
         return response
 
 
