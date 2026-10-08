@@ -9,7 +9,8 @@ import sys
 import traceback
 from pathlib import Path
 
-from harness import APPIUM_URL, Phone, Recorder, RunContext, capabilities, keyboard_preflight
+from harness import (APPIUM_URL, Phone, Recorder, RunContext, capabilities, keyboard_preflight,
+                     prebuilt_wda_capabilities)
 
 TRACEBACK_FRAMES = 6
 
@@ -18,7 +19,8 @@ def _driver(start_url: str):
     from appium import webdriver
     from appium.options.common import AppiumOptions
     options = AppiumOptions()
-    options.load_capabilities(capabilities(os.environ["UDID"], start_url))
+    options.load_capabilities({**capabilities(os.environ["UDID"], start_url),
+                               **prebuilt_wda_capabilities(os.environ["WDA_APP"])})
     return webdriver.Remote(APPIUM_URL, options=options)
 
 
