@@ -34,6 +34,7 @@ NEW_COMMAND_TIMEOUT_S = 600
 WEBVIEW_CONNECT_TIMEOUT_MS = 60_000
 WEBVIEW_ATOM_WAIT_MS = 8_000
 NATIVE_IDLE_WAIT_S = 0
+NO_SYSLOG_PREDICATE = 'process == "nexus_no_such_process"'
 MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
 COLD_SAFARI_READY_WAIT_S = 180
@@ -44,11 +45,13 @@ POLL_S = 0.25
 NATIVE_CONTEXT = "NATIVE_APP"
 CSS_SELECTOR = "css selector"
 IOS_CLASS_CHAIN = "-ios class chain"
-IOS_PREDICATE = "-ios predicate string"
-VISIBLE_KEYBOARD_PREDICATE = "type == 'XCUIElementTypeKeyboard' AND visible == 1"
+CLASS_NAME = "class name"
+KEYBOARD_CLASS = "XCUIElementTypeKeyboard"
 KEYBOARD_TYPE_COMMAND = "wda_keys"
 KEYBOARD_TYPE_ROUTE = ("POST", "/session/$sessionId/keys")
-CLOSE_BUTTONS_CHAIN = ('**/XCUIElementTypeButton[`name IN {"Close", "Not Now"} OR label IN {"Close", "Not Now"}`]')
+CLOSE_BUTTONS_CHAIN = ('**/XCUIElementTypeButton[`(name IN {"Close", "Not Now"} OR label IN {"Close", "Not Now"})'
+                       ' AND name != "StopButton"`]')
+GONE_ELEMENT_ERROR = "StaleElementReferenceException"
 WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
@@ -88,7 +91,7 @@ def capabilities(udid: str, start_url: str) -> dict:  # kwargs-lint: ignore: dev
             "appium:safariInitialUrl": start_url, "appium:wdaLaunchTimeout": WDA_LAUNCH_TIMEOUT_MS,
             "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_S, "appium:showXcodeLog": True,
             "appium:webviewConnectTimeout": WEBVIEW_CONNECT_TIMEOUT_MS, "appium:webviewAtomWaitTimeout": WEBVIEW_ATOM_WAIT_MS,
-            "appium:waitForIdleTimeout": NATIVE_IDLE_WAIT_S,
+            "appium:waitForIdleTimeout": NATIVE_IDLE_WAIT_S, "appium:iosSimulatorLogsPredicate": NO_SYSLOG_PREDICATE,
             "appium:maxTypingFrequency": TYPING_KEYS_PER_MINUTE, "pageLoadStrategy": "eager", **KEYBOARD_CAPABILITIES}
 
 
@@ -130,6 +133,15 @@ class RunContext:
     recorder: Recorder
 
 
+def _close_unless_gone(button):
+    try:
+        if button.is_displayed():
+            button.click()
+    except Exception as error:
+        if type(error).__name__ != GONE_ELEMENT_ERROR:
+            raise
+
+
 class Phone:
     def __init__(self, context: RunContext):
         self.driver = context.driver
@@ -162,8 +174,8 @@ class Phone:
             page_buttons = {button.id for button in
                             self.driver.find_elements(IOS_CLASS_CHAIN, WEB_CONTENT_BUTTONS_CHAIN)}
             for button in closes:
-                if button.id not in page_buttons and button.is_displayed():
-                    button.click()
+                if button.id not in page_buttons:
+                    _close_unless_gone(button)
 
     def _native_tap(self, css: str):
         self.close_safari_tips()
@@ -190,7 +202,7 @@ class Phone:
 
     def keyboard_up(self) -> bool:
         with self._native():
-            return bool(self.driver.find_elements(IOS_PREDICATE, VISIBLE_KEYBOARD_PREDICATE))
+            return bool(self.driver.find_elements(CLASS_NAME, KEYBOARD_CLASS))
 
     def wait_keyboard(self, *, up: bool) -> bool:
         deadline = time.monotonic() + KEYBOARD_WAIT_S
