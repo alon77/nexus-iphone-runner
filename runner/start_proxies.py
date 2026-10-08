@@ -28,7 +28,7 @@ def _proxy_command(run_dir: Path, origin: dict) -> list:
     tunnel_host = origin["tunnel"].split("//", 1)[1]
     return [sys.executable, str(PROXY_SCRIPT), "--listen-host", LISTEN_HOST, "--listen-port", str(origin["port"]),
             "--upstream", origin["tunnel"], "--upstream-host", tunnel_host, "--added-token-env", "RUN_TOKEN",
-            "--cert", str(run_dir / "leaf.pem"), "--key", str(run_dir / "leaf.key"), "--verify-tls"]
+            "--cert", str(run_dir / "leaf.pem"), "--key", str(run_dir / "leaf.key"), "--verify-tls", "--cache-static"]
 
 
 def _start(run_dir: Path, origin: dict):
