@@ -69,6 +69,9 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl keychain "$UDID" add-root-cert "$RUN_DIR/ca.pem"
           open -a Simulator --args -CurrentDeviceUDID "$UDID"
+          xcrun simctl launch "$UDID" com.apple.mobilesafari
+          sleep 20
+          xcrun simctl terminate "$UDID" com.apple.mobilesafari
 
       - name: Appium
         run: |
@@ -88,7 +91,8 @@ jobs:
         env:
           IPHONE_RUN_KEY: ${{ secrets.IPHONE_RUN_KEY }}
         run: |
-          mkdir -p "$RUN_DIR/out"
+          mkdir -p "$RUN_DIR/out/shots"
+          [ -n "$UDID" ] && xcrun simctl io "$UDID" screenshot "$RUN_DIR/out/shots/99_simulator_at_end.png" > /dev/null 2>&1 || true
           "$VENV/bin/python" runner/seal_output.py "$RUN_DIR"
 
       # actions/upload-artifact v7.0.2
