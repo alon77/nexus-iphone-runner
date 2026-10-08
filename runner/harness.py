@@ -87,7 +87,7 @@ end tell
 
 def capabilities(udid: str, start_url: str) -> dict:  # kwargs-lint: ignore: device then page, order is canonical
     return {"platformName": "iOS", "appium:automationName": "XCUITest", "browserName": "Safari",
-            "appium:udid": udid, "appium:nativeWebTap": True, "appium:showSafariConsoleLog": True,
+            "appium:udid": udid, "appium:nativeWebTap": True, "appium:showSafariConsoleLog": False,
             "appium:safariInitialUrl": start_url, "appium:wdaLaunchTimeout": WDA_LAUNCH_TIMEOUT_MS,
             "appium:newCommandTimeout": DRIVER_NEVER_TIMES_OUT_S, "appium:showXcodeLog": True,
             "appium:webviewConnectTimeout": WEBVIEW_CONNECT_TIMEOUT_MS, "appium:webviewAtomWaitTimeout": WEBVIEW_ATOM_WAIT_MS,
