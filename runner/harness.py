@@ -9,6 +9,7 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
     rect(css)             getBoundingClientRect as a dict (None when the element is missing)
     viewport()            visual_height, visual_offset_top, inner_height, inner_width, scroll_y
     shot(name)            full-screen simulator screenshot, keyboard included
+    js(script)            run JavaScript in the page, `return` hands a value back (document.cookie, input values)
     expect(name, condition, detail)   one red/green line in results.json
 
 Appium never leaks into a spec. Before any spec step, keyboard_preflight proves the software keyboard comes up.
@@ -35,7 +36,7 @@ KEYBOARD_CLASS = "XCUIElementTypeKeyboard"
 FOCUSED_FIELD = "hasKeyboardFocus == 1"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
-SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot")
+SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js")
 VIEWPORT_JS = ("return {visual_height: window.visualViewport.height, visual_offset_top: window.visualViewport.offsetTop,"
                " inner_height: window.innerHeight, inner_width: window.innerWidth, scroll_y: window.scrollY};")
 RECT_JS = ("const element = document.querySelector(arguments[0]); if (!element) return null;"
@@ -147,6 +148,9 @@ class Phone:
 
     def viewport(self) -> dict:
         return self.driver.execute_script(VIEWPORT_JS)
+
+    def js(self, script: str):
+        return self.driver.execute_script(script)
 
     def shot(self, name: str) -> Path:
         path = self.recorder.out_dir / "shots" / f"{len(self.recorder.shots) + 1:02d}_{name}.png"
