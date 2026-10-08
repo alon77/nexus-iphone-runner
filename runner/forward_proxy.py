@@ -6,6 +6,11 @@ Two uses of the same hop (`guide iphone:tunnel`):
 2. The runner proxy, on the GitHub Mac, on 443/6001 behind the simulator's /etc/hosts: terminates Safari's TLS with
    the run's throwaway cert, adds the run token and forwards to the cloudflared tunnel URL.
 
+The dev origin sends no-store, so Safari caches nothing and every asset would cross the tunnel on every load. The
+runner proxy keeps every GET 200 that carries an ETag and no Set-Cookie (never a Range) for the session; before each
+spec the runner POSTs REVALIDATE_PATH, the proxy sends every cached path + ETag to the gate's VALIDATE_PATH in one
+trip, the gate asks its origin locally, and every entry the origin no longer confirms is dropped.
+
 Standalone on purpose: the runner repo carries this file as-is, so it imports nothing from lib/.
 """
 
@@ -23,8 +28,14 @@ from aiohttp import web
 from multidict import CIMultiDict
 
 TOKEN_HEADER = "X-Nexus-Run-Token"
+OK = 200
+NOT_MODIFIED = 304
 FORBIDDEN = 403
 BAD_GATEWAY = 502
+VALIDATE_PATH = "/__nexus/validate"
+REVALIDATE_PATH = "/__nexus/revalidate"
+CACHE_ENTRY_LIMIT_BYTES = 16 * 1024 * 1024
+UNCACHED_RESPONSE_HEADERS = {"content-length"}
 CHUNK_BYTES = 65536
 HOP_BY_HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
                       "transfer-encoding", "upgrade", "host"}
@@ -32,6 +43,7 @@ WEBSOCKET_HANDSHAKE_HEADERS = {"sec-websocket-key", "sec-websocket-version", "se
                                "sec-websocket-protocol"}
 ROUTE_KEY = web.AppKey("route", object)
 SESSION_KEY = web.AppKey("session", aiohttp.ClientSession)
+CACHE_KEY = web.AppKey("cache", dict)
 
 
 @dataclass
@@ -41,6 +53,7 @@ class Route:
     required_token: Optional[str] = None
     added_token: Optional[str] = None
     verify_tls: bool = False
+    cache_static: bool = False
 
 
 def _token_accepted(route: Route, request: web.Request) -> bool:
@@ -106,6 +119,46 @@ def _print_timing(request: web.Request, status: int, *, started: float, headers_
           f"headers {(headers_at - started) * 1000:.0f}ms total {(finished - started) * 1000:.0f}ms {sent}B", flush=True)
 
 
+def _cache_candidate(request: web.Request) -> bool:
+    return request.app[ROUTE_KEY].cache_static and request.method == "GET" and "Range" not in request.headers
+
+
+def _cacheable(upstream) -> bool:
+    return upstream.status == OK and "ETag" in upstream.headers and "Set-Cookie" not in upstream.headers
+
+
+def _keep(request: web.Request, upstream, body: bytes):
+    headers = [(name, value) for name, value in _downstream_headers(upstream.headers).items()
+               if name.lower() not in UNCACHED_RESPONSE_HEADERS]
+    request.app[CACHE_KEY][request.path_qs] = {"headers": headers, "body": body, "etag": upstream.headers["ETag"],
+                                               "accept_encoding": request.headers.get("Accept-Encoding", "")}
+
+
+def _from_cache(request: web.Request) -> Optional[web.Response]:
+    entry = request.app[CACHE_KEY].get(request.path_qs) if _cache_candidate(request) else None
+    if entry is None:
+        return None
+    print(f"{time.strftime('%H:%M:%S')} {request.method} {request.path} {OK} cache {len(entry['body'])}B", flush=True)
+    return web.Response(status=OK, headers=CIMultiDict(entry["headers"]), body=entry["body"])
+
+
+async def _relay(request: web.Request, upstream) -> tuple:
+    response = web.StreamResponse(status=upstream.status, reason=upstream.reason,
+                                  headers=_downstream_headers(upstream.headers))
+    await response.prepare(request)
+    keeping = _cache_candidate(request) and _cacheable(upstream)
+    chunks, sent = [], 0
+    async for chunk in upstream.content.iter_chunked(CHUNK_BYTES):
+        await response.write(chunk)
+        sent += len(chunk)
+        keeping = keeping and sent <= CACHE_ENTRY_LIMIT_BYTES
+        chunks = chunks + [chunk] if keeping else []
+    await response.write_eof()
+    if keeping:
+        _keep(request, upstream, b"".join(chunks))
+    return response, sent
+
+
 async def _forward_http(request: web.Request, headers) -> web.StreamResponse:
     route = request.app[ROUTE_KEY]
     started = time.monotonic()
@@ -113,14 +166,7 @@ async def _forward_http(request: web.Request, headers) -> web.StreamResponse:
     async with request.app[SESSION_KEY].request(request.method, route.upstream + request.path_qs, headers=headers,
                                                 data=body, allow_redirects=False, ssl=_ssl_for(route)) as upstream:
         headers_at = time.monotonic()
-        response = web.StreamResponse(status=upstream.status, reason=upstream.reason,
-                                      headers=_downstream_headers(upstream.headers))
-        await response.prepare(request)
-        sent = 0
-        async for chunk in upstream.content.iter_chunked(CHUNK_BYTES):
-            await response.write(chunk)
-            sent += len(chunk)
-        await response.write_eof()
+        response, sent = await _relay(request, upstream)
         _print_timing(request, upstream.status, started=started, headers_at=headers_at, sent=sent)
         return response
 
@@ -133,9 +179,53 @@ async def _forward(request: web.Request):
     try:
         if _is_websocket(request):
             return await _forward_websocket(request, headers)
-        return await _forward_http(request, headers)
+        return _from_cache(request) or await _forward_http(request, headers)
     except aiohttp.ClientError as error:
         return web.Response(status=BAD_GATEWAY, text=f"upstream unreachable: {type(error).__name__}")
+
+
+async def _still_fresh(app: web.Application, path: str, entry: dict) -> bool:
+    route = app[ROUTE_KEY]
+    if not path.startswith("/"):
+        return False
+    headers = {"Host": route.upstream_host, "If-None-Match": entry["etag"],
+               "Accept-Encoding": entry.get("accept_encoding", "")}
+    try:
+        async with app[SESSION_KEY].get(route.upstream + path, headers=headers, allow_redirects=False,
+                                        ssl=_ssl_for(route)) as answer:
+            return answer.status == NOT_MODIFIED or answer.headers.get("ETag") == entry["etag"]
+    except aiohttp.ClientError:
+        return False
+
+
+async def _validate(request: web.Request) -> web.Response:
+    if not _token_accepted(request.app[ROUTE_KEY], request):
+        return web.Response(status=FORBIDDEN, text="forbidden")
+    entries = await request.json()
+    fresh = await asyncio.gather(*(_still_fresh(request.app, path, entry) for path, entry in entries.items()))
+    return web.json_response(dict(zip(entries, fresh)))
+
+
+async def _confirmed_paths(app: web.Application, entries: dict) -> dict:
+    route = app[ROUTE_KEY]
+    headers = {"Host": route.upstream_host, TOKEN_HEADER: route.added_token or ""}
+    try:
+        async with app[SESSION_KEY].post(route.upstream + VALIDATE_PATH, json=entries, headers=headers,
+                                         ssl=_ssl_for(route)) as answer:
+            return await answer.json() if answer.status == OK else {}
+    except (aiohttp.ClientError, ValueError):
+        return {}
+
+
+async def _revalidate(request: web.Request) -> web.Response:
+    cache = request.app[CACHE_KEY]
+    entries = {path: {"etag": entry["etag"], "accept_encoding": entry["accept_encoding"]}
+               for path, entry in cache.items()}
+    confirmed = await _confirmed_paths(request.app, entries) if entries else {}
+    stale = [path for path in entries if confirmed.get(path) is not True]
+    for path in stale:
+        cache.pop(path, None)
+    return web.json_response({"checked": len(entries), "dropped": len(stale)})
 
 
 async def _open_session(app: web.Application):
@@ -147,7 +237,12 @@ async def _open_session(app: web.Application):
 def make_app(route: Route) -> web.Application:
     app = web.Application(client_max_size=0)
     app[ROUTE_KEY] = route
+    app[CACHE_KEY] = {}
     app.cleanup_ctx.append(_open_session)
+    if route.required_token is not None:
+        app.router.add_post(VALIDATE_PATH, _validate)
+    if route.cache_static:
+        app.router.add_post(REVALIDATE_PATH, _revalidate)
     app.router.add_route("*", "/{tail:.*}", _forward)
     return app
 
@@ -163,6 +258,7 @@ def _arguments():
     parser.add_argument("--cert")
     parser.add_argument("--key")
     parser.add_argument("--verify-tls", action="store_true")
+    parser.add_argument("--cache-static", action="store_true", help="keep ETag'd GETs for the session (runner side)")
     return parser.parse_args()
 
 
@@ -170,7 +266,7 @@ def _route_from(arguments) -> Route:
     return Route(upstream=arguments.upstream, upstream_host=arguments.upstream_host,
                  required_token=os.environ[arguments.required_token_env] if arguments.required_token_env else None,
                  added_token=os.environ[arguments.added_token_env] if arguments.added_token_env else None,
-                 verify_tls=arguments.verify_tls)
+                 verify_tls=arguments.verify_tls, cache_static=arguments.cache_static)
 
 
 def _listen_tls(arguments):
