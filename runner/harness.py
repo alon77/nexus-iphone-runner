@@ -34,7 +34,6 @@ OSASCRIPT_TIMEOUT_S = 30
 POLL_S = 0.25
 NATIVE_CONTEXT = "NATIVE_APP"
 KEYBOARD_CLASS = "XCUIElementTypeKeyboard"
-FOCUSED_FIELD = "hasKeyboardFocus == 1"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
 SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js")
@@ -120,11 +119,10 @@ class Phone:
         self.driver.find_element(By.CSS_SELECTOR, css).click()
 
     def type(self, css: str, text: str):  # kwargs-lint: ignore: spec verb, selector then text is the spec format
-        from appium.webdriver.common.appiumby import AppiumBy
         self.tap(css)
         self.wait_keyboard(up=True)
         with self._native():
-            self.driver.find_element(AppiumBy.IOS_PREDICATE, FOCUSED_FIELD).send_keys(text)
+            self.driver.execute_script("mobile: keys", {"keys": list(text)})
 
     def keyboard_up(self) -> bool:
         from appium.webdriver.common.appiumby import AppiumBy
