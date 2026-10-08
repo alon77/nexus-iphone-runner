@@ -1,0 +1,99 @@
+# Pushed by `iphone setup` from Nexus lib/iphone/runner/ — this repo is a copy, never edit it here.
+# Every input and artifact is ciphertext (runner/sealed.py); every decrypted value is masked. guide iphone:index
+name: iphone_run
+run-name: iphone ${{ inputs.nonce }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      nonce:
+        description: run id chosen by `iphone run`, so it can find this run
+        required: true
+      payload:
+        description: sealed run payload
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      XCODE_APP: /Applications/Xcode_26.2.app
+      IOS_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-2
+      DEVICE_TYPE: com.apple.CoreSimulator.SimDeviceType.iPhone-17
+      RUN_DIR: ${{ github.workspace }}/iphone_run
+      VENV: ${{ github.workspace }}/venv
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # actions/setup-python v7.0.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12.10'
+      # actions/setup-node v7.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22.23.2'
+
+      - name: Python packages
+        run: |
+          python -m venv "$VENV"
+          "$VENV/bin/pip" install --quiet --disable-pip-version-check -r runner/requirements.txt
+
+      - name: Unpack the sealed payload
+        env:
+          PAYLOAD: ${{ inputs.payload }}
+          IPHONE_RUN_KEY: ${{ secrets.IPHONE_RUN_KEY }}
+        run: '"$VENV/bin/python" runner/unpack.py "$RUN_DIR"'
+
+      - name: Target hosts to this Mac, throwaway certs
+        run: |
+          sudo tee -a /etc/hosts < "$RUN_DIR/hosts_lines" > /dev/null
+          sudo dscacheutil -flushcache
+          sudo killall -HUP mDNSResponder
+          "$VENV/bin/python" runner/certs.py "$RUN_DIR"
+
+      - name: Runner proxies on the real ports
+        run: sudo "$VENV/bin/python" runner/start_proxies.py "$RUN_DIR"
+
+      - name: Boot the simulator, trust the run CA
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          UDID=$(xcrun simctl create iphone_run "$DEVICE_TYPE" "$IOS_RUNTIME")
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl keychain "$UDID" add-root-cert "$RUN_DIR/ca.pem"
+          open -a Simulator --args -CurrentDeviceUDID "$UDID"
+
+      - name: Appium
+        run: |
+          npm install --global --silent appium@3.8.0
+          appium driver install xcuitest@12.16.0
+          nohup appium --port 4723 --log-no-colors --log "$RUN_DIR/out/appium.log" > /dev/null 2>&1 &
+          for attempt in $(seq 60); do curl -sf http://127.0.0.1:4723/status > /dev/null && exit 0; sleep 2; done
+          echo "Appium never answered /status"; exit 1
+
+      - name: Run the spec
+        run: '"$VENV/bin/python" runner/run_spec.py "$RUN_DIR"'
+
+      - name: Seal the output
+        if: always()
+        env:
+          IPHONE_RUN_KEY: ${{ secrets.IPHONE_RUN_KEY }}
+        run: |
+          mkdir -p "$RUN_DIR/out"
+          "$VENV/bin/python" runner/seal_output.py "$RUN_DIR"
+
+      # actions/upload-artifact v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: iphone_run
+          path: iphone_run/out.sealed
+          retention-days: 1
+          if-no-files-found: warn
