@@ -5,7 +5,7 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
     tap(css)              closes any Safari tip bubble (it swallows the next tap), then a real native tap on the
                           element (nativeWebTap), so focus raises the keyboard; a tap that leaves a focusable
                           element unfocused is retried once and listed in results.json tap_retries
-    type(css, text)       tap, then type through the on-screen keyboard
+    type(css, text)       tap, then type the whole text into the focused field in one XCTest typeText (WDA /wda/keys)
     keyboard_up()         True while a native XCUIElementTypeKeyboard is visible
     dismiss_keyboard()    hide the keyboard, wait until it is gone
     rect(css)             getBoundingClientRect as a dict (None when the element is missing)
@@ -44,8 +44,8 @@ NATIVE_CONTEXT = "NATIVE_APP"
 CSS_SELECTOR = "css selector"
 CLASS_NAME = "class name"
 IOS_CLASS_CHAIN = "-ios class chain"
-IOS_PREDICATE = "-ios predicate string"
-FOCUSED_FIELD_PREDICATE = "hasKeyboardFocus == 1"
+KEYBOARD_TYPE_COMMAND = "wda_keys"
+KEYBOARD_TYPE_ROUTE = ("POST", "/session/$sessionId/keys")
 CLOSE_BUTTONS_CHAIN = ('**/XCUIElementTypeButton[`name IN {"Close", "Not Now"} OR label IN {"Close", "Not Now"}`]')
 WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
 KEYBOARD_CLASS = "XCUIElementTypeKeyboard"
@@ -93,6 +93,11 @@ def capabilities(udid: str, start_url: str) -> dict:  # kwargs-lint: ignore: dev
 
 def prebuilt_wda_capabilities(app_path: str) -> dict:
     return {"appium:usePreinstalledWDA": True, "appium:prebuiltWDAPath": app_path}
+
+
+def with_keyboard_typing(driver):
+    driver.command_executor.add_command(KEYBOARD_TYPE_COMMAND, *KEYBOARD_TYPE_ROUTE)
+    return driver
 
 
 @dataclass
@@ -176,8 +181,11 @@ class Phone:
     def type(self, css: str, text: str):  # kwargs-lint: ignore: spec verb, selector then text is the spec format
         self.tap(css)
         self.wait_keyboard(up=True)
-        with self._native():
-            self.driver.find_element(IOS_PREDICATE, FOCUSED_FIELD_PREDICATE).send_keys(text)
+        try:
+            self.driver.execute(KEYBOARD_TYPE_COMMAND, {"value": [text]})
+        except Exception:
+            self.save_native_tree("type_failed")
+            raise
 
     def keyboard_up(self) -> bool:
         with self._native():
