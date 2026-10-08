@@ -32,6 +32,7 @@ WDA_LAUNCH_TIMEOUT_MS = 600_000
 NEW_COMMAND_TIMEOUT_S = 600
 WEBVIEW_CONNECT_TIMEOUT_MS = 60_000
 WEBVIEW_ATOM_WAIT_MS = 8_000
+NATIVE_IDLE_WAIT_S = 0
 MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
 COLD_SAFARI_READY_WAIT_S = 180
@@ -84,6 +85,7 @@ def capabilities(udid: str, start_url: str) -> dict:  # kwargs-lint: ignore: dev
             "appium:safariInitialUrl": start_url, "appium:wdaLaunchTimeout": WDA_LAUNCH_TIMEOUT_MS,
             "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_S, "appium:showXcodeLog": True,
             "appium:webviewConnectTimeout": WEBVIEW_CONNECT_TIMEOUT_MS, "appium:webviewAtomWaitTimeout": WEBVIEW_ATOM_WAIT_MS,
+            "appium:waitForIdleTimeout": NATIVE_IDLE_WAIT_S,
             "appium:maxTypingFrequency": TYPING_KEYS_PER_MINUTE, "pageLoadStrategy": "eager", **KEYBOARD_CAPABILITIES}
 
 
