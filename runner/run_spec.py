@@ -56,7 +56,7 @@ def main():
     except Exception:
         error = traceback.format_exc(limit=-TRACEBACK_FRAMES)
     results = {"spec": recorder.spec, "preflight": recorder.preflight, "expects": recorder.expects,
-               "shots": recorder.shots, "error": error}
+               "shots": recorder.shots, "tap_retries": recorder.tap_retries, "error": error}
     (recorder.out_dir / "results.json").write_text(json.dumps(results, indent=1))
     reds = sum(not expect["ok"] for expect in recorder.expects)
     print(f"preflight={'ok' if (recorder.preflight or {}).get('ok') else 'red'} expects={len(recorder.expects)} "
