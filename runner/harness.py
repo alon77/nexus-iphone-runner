@@ -3,7 +3,8 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
 
     open(path)            Safari goes to the target host + path (or a full URL)
     tap(css)              closes any Safari tip bubble (it swallows the next tap), then a real native tap on the
-                          element (nativeWebTap), so focus raises the keyboard
+                          element (nativeWebTap), so focus raises the keyboard; a tap that leaves a focusable
+                          element unfocused is retried once and listed in results.json tap_retries
     type(css, text)       tap, then type through the on-screen keyboard
     keyboard_up()         True while a native XCUIElementTypeKeyboard is visible
     dismiss_keyboard()    hide the keyboard, wait until it is gone
@@ -52,6 +53,10 @@ PROBE_INPUT_JS = ("const probe = document.createElement('input'); probe.id = arg
                   " probe.style.cssText = 'position:fixed;top:60px;left:16px;width:240px;height:44px;"
                   "font-size:16px;z-index:2147483647'; document.body.appendChild(probe);")
 REMOVE_PROBE_JS = "const probe = document.getElementById(arguments[0]); if (probe) probe.remove();"
+FOCUS_STATE_JS = ("const element = document.querySelector(arguments[0]);"
+                  " if (!element) return {focusable: false, focused: false};"
+                  " return {focusable: element.matches('input, textarea, select, [contenteditable]:not([contenteditable=\\'false\\'])'),"
+                  " focused: document.activeElement === element};")
 BLUR_JS = "if (document.activeElement) document.activeElement.blur();"
 HARDWARE_KEYBOARD_OFF_SCRIPT = '''
 tell application "Simulator" to activate
@@ -88,6 +93,7 @@ class Recorder:
     preflight: Optional[dict] = None
     expects: list = field(default_factory=list)
     shots: list = field(default_factory=list)
+    tap_retries: list = field(default_factory=list)
 
     def record(self, expectation: Expectation) -> bool:
         passed = bool(expectation.condition)
@@ -128,9 +134,19 @@ class Phone:
                 if button.id not in page_buttons and button.is_displayed():
                     button.click()
 
-    def tap(self, css: str):
+    def _native_tap(self, css: str):
         self.close_safari_tips()
         self.driver.find_element(CSS_SELECTOR, css).click()
+
+    def _focus_missed(self, css: str) -> bool:
+        state = self.driver.execute_script(FOCUS_STATE_JS, css)
+        return state["focusable"] and not state["focused"]
+
+    def tap(self, css: str):
+        self._native_tap(css)
+        if self._focus_missed(css):
+            self._native_tap(css)
+            self.recorder.tap_retries.append({"css": css, "focused_after_retry": not self._focus_missed(css)})
 
     def type(self, css: str, text: str):  # kwargs-lint: ignore: spec verb, selector then text is the spec format
         self.tap(css)
