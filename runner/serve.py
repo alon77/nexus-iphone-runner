@@ -88,12 +88,20 @@ def _save_appium_slice(serving: dict, *, job: dict):
             (job["out_dir"] / "appium.log").write_bytes(handle.read())
 
 
-def _timed_spec(phone, job: dict) -> dict:
+def cleaned(phone) -> dict:
     started = time.monotonic()
-    phone.clean_state()
-    cleaned = time.monotonic()
+    try:
+        phone.clean_state()
+        clean_error = None
+    except Exception as failure:
+        clean_error = _own_traceback(failure)
+    return {"clean_s": round(time.monotonic() - started, 2), "clean_error": clean_error}
+
+
+def _timed_spec(phone, job: dict) -> float:
+    started = time.monotonic()
     exec(compile(job["spec_source"], job["spec_name"], "exec"), phone.spec_namespace())
-    return {"clean_s": round(cleaned - started, 2), "spec_s": round(time.monotonic() - cleaned, 2)}
+    return round(time.monotonic() - started, 2)
 
 
 def _own_traceback(error: BaseException) -> str:
@@ -107,11 +115,15 @@ def _results(serving: dict, *, job: dict) -> dict:
     phone = serving["phone"]
     recorder = Recorder(out_dir=job["out_dir"], spec=job["spec_name"])
     phone.recorder = recorder
-    timings, error = {"clean_s": None, "spec_s": None}, None
-    try:
-        timings = _timed_spec(phone, job)
-    except Exception as failure:
-        error = _own_traceback(failure)
+    clean = serving.get("clean", {})
+    timings, error = {"clean_s": clean.get("clean_s"), "spec_s": None}, None
+    if clean.get("clean_error"):
+        error = f"Safari clean state before this spec failed, the spec did not run: {clean['clean_error']}"
+    else:
+        try:
+            timings["spec_s"] = _timed_spec(phone, job)
+        except Exception as failure:
+            error = _own_traceback(failure)
     (job["out_dir"] / "safari_console.json").write_text(json.dumps(phone.save_console(), indent=1))
     return {"spec": job["spec_name"], "preflight": serving.get("preflight", {"ok": True}), "expects": recorder.expects,
             "shots": recorder.shots, "tap_retries": recorder.tap_retries, "error": error, "timings": timings}
@@ -135,6 +147,7 @@ def serve_jobs(desk: DeskClient, serving: dict) -> int:
     while job is not STOP:
         if job:
             desk.post_result(job["job_id"], run_job(serving, job=job))
+            serving["clean"] = cleaned(serving["phone"])
             served += 1
             print(f"served spec {served}")
         job = desk.next_job()
@@ -164,7 +177,7 @@ def _warm_phone(run: dict, out_dir: Path) -> dict:
     phone = Phone(RunContext(driver=driver, base_url=run["base_url"], recorder=Recorder(out_dir=out_dir)))
     preflight = _preflight(phone)
     timings = {"appium_session_s": session_s, "preflight_s": round(time.monotonic() - started - session_s, 1)}
-    return {"phone": phone, "preflight": preflight, "timings": timings}
+    return {"phone": phone, "preflight": preflight, "timings": timings, "clean": cleaned(phone)}
 
 
 def main():
