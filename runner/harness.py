@@ -27,6 +27,7 @@ KEYBOARD_CAPABILITIES = {"appium:connectHardwareKeyboard": False,
 APPIUM_URL = "http://127.0.0.1:4723"
 WDA_LAUNCH_TIMEOUT_MS = 600_000
 NEW_COMMAND_TIMEOUT_S = 600
+WEBVIEW_CONNECT_TIMEOUT_MS = 60_000
 MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
 OSASCRIPT_TIMEOUT_S = 30
@@ -60,7 +61,8 @@ def capabilities(udid: str, start_url: str) -> dict:  # kwargs-lint: ignore: dev
     return {"platformName": "iOS", "appium:automationName": "XCUITest", "browserName": "Safari",
             "appium:udid": udid, "appium:nativeWebTap": True, "appium:showSafariConsoleLog": True,
             "appium:safariInitialUrl": start_url, "appium:wdaLaunchTimeout": WDA_LAUNCH_TIMEOUT_MS,
-            "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_S, "appium:showXcodeLog": True, **KEYBOARD_CAPABILITIES}
+            "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_S, "appium:showXcodeLog": True,
+            "appium:webviewConnectTimeout": WEBVIEW_CONNECT_TIMEOUT_MS, **KEYBOARD_CAPABILITIES}
 
 
 def prebuilt_wda_capabilities(app_path: str) -> dict:
