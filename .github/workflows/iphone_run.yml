@@ -7,10 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       nonce:
-        description: run id chosen by `iphone run`, so it can find this run
+        description: session id chosen by `iphone up`, so it can find this run
         required: true
       payload:
-        description: sealed run payload
+        description: sealed session payload
         required: true
 
 permissions:
@@ -19,7 +19,7 @@ permissions:
 jobs:
   run:
     runs-on: macos-15
-    timeout-minutes: 40
+    timeout-minutes: 120
     env:
       XCODE_APP: /Applications/Xcode_26.2.app
       IOS_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-2
@@ -61,17 +61,20 @@ jobs:
 
       - name: Boot the simulator, trust the run CA
         run: |
+          stamp() { echo "$(date +%T) $1"; }
           sudo xcode-select -s "$XCODE_APP"
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           UDID=$(xcrun simctl create iphone_run "$DEVICE_TYPE" "$IOS_RUNTIME")
           echo "UDID=$UDID" >> "$GITHUB_ENV"
+          stamp "created"
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
+          stamp "booted"
+          xcrun simctl spawn "$UDID" defaults write com.apple.WebUI AutoFillPasswords -int 0
           xcrun simctl keychain "$UDID" add-root-cert "$RUN_DIR/ca.pem"
+          stamp "autofill off, run CA trusted"
           open -a Simulator --args -CurrentDeviceUDID "$UDID"
-          xcrun simctl launch "$UDID" com.apple.mobilesafari
-          sleep 20
-          xcrun simctl terminate "$UDID" com.apple.mobilesafari
+          stamp "Simulator app open"
 
       - name: Appium
         run: |
@@ -80,12 +83,12 @@ jobs:
           appium driver run xcuitest download-wda-sim --platform=ios --outdir="$RUN_DIR/wda"
           echo "WDA_APP=$(find "$RUN_DIR/wda" -maxdepth 2 -name 'WebDriverAgentRunner-Runner.app' | head -1)" >> "$GITHUB_ENV"
           nohup appium --port 4723 --log-no-colors --log "$RUN_DIR/out/appium.log" > /dev/null 2>&1 &
-          for attempt in $(seq 60); do curl -sf http://127.0.0.1:4723/status > /dev/null && exit 0; sleep 2; done
+          for attempt in $(seq 240); do curl -sf http://127.0.0.1:4723/status > /dev/null && exit 0; sleep 0.25; done
           echo "Appium never answered /status"; exit 1
 
-      - name: Run the spec
-        timeout-minutes: 20
-        run: '"$VENV/bin/python" runner/run_spec.py "$RUN_DIR"'
+      - name: Serve specs
+        timeout-minutes: 100
+        run: '"$VENV/bin/python" -m runner.serve "$RUN_DIR"'
 
       - name: Seal the output
         if: always()
