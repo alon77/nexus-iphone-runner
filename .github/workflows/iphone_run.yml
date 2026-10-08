@@ -84,6 +84,7 @@ jobs:
           echo "Appium never answered /status"; exit 1
 
       - name: Run the spec
+        timeout-minutes: 20
         run: '"$VENV/bin/python" runner/run_spec.py "$RUN_DIR"'
 
       - name: Seal the output
