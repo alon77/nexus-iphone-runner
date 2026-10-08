@@ -44,6 +44,8 @@ NATIVE_CONTEXT = "NATIVE_APP"
 CSS_SELECTOR = "css selector"
 CLASS_NAME = "class name"
 IOS_CLASS_CHAIN = "-ios class chain"
+IOS_PREDICATE = "-ios predicate string"
+FOCUSED_FIELD_PREDICATE = "hasKeyboardFocus == 1"
 CLOSE_BUTTONS_CHAIN = ('**/XCUIElementTypeButton[`name IN {"Close", "Not Now"} OR label IN {"Close", "Not Now"}`]')
 WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
 KEYBOARD_CLASS = "XCUIElementTypeKeyboard"
@@ -175,7 +177,7 @@ class Phone:
         self.tap(css)
         self.wait_keyboard(up=True)
         with self._native():
-            self.driver.execute_script("mobile: keys", {"keys": list(text)})
+            self.driver.find_element(IOS_PREDICATE, FOCUSED_FIELD_PREDICATE).send_keys(text)
 
     def keyboard_up(self) -> bool:
         with self._native():
