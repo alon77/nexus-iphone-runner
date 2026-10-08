@@ -31,6 +31,7 @@ APPIUM_URL = "http://127.0.0.1:4723"
 WDA_LAUNCH_TIMEOUT_MS = 600_000
 NEW_COMMAND_TIMEOUT_S = 600
 WEBVIEW_CONNECT_TIMEOUT_MS = 60_000
+WEBVIEW_ATOM_WAIT_MS = 8_000
 MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
 PAGE_READY_WAIT_S = 30
@@ -63,7 +64,6 @@ FOCUS_STATE_JS = ("const element = document.querySelector(arguments[0]);"
 BLUR_JS = "if (document.activeElement) document.activeElement.blur();"
 PAGE_READY_JS = "return document.readyState;"
 READY_STATES = ("interactive", "complete")
-WEBVIEW_PREFIX = "WEBVIEW"
 PROBE_PRESENT_JS = "return !!document.getElementById(arguments[0]);"
 CLEAN_PATH = "/robots.txt"
 BLANK_PAGE = "about:blank"
@@ -82,7 +82,7 @@ def capabilities(udid: str, start_url: str) -> dict:  # kwargs-lint: ignore: dev
             "appium:udid": udid, "appium:nativeWebTap": True, "appium:showSafariConsoleLog": True,
             "appium:safariInitialUrl": start_url, "appium:wdaLaunchTimeout": WDA_LAUNCH_TIMEOUT_MS,
             "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_S, "appium:showXcodeLog": True,
-            "appium:webviewConnectTimeout": WEBVIEW_CONNECT_TIMEOUT_MS,
+            "appium:webviewConnectTimeout": WEBVIEW_CONNECT_TIMEOUT_MS, "appium:webviewAtomWaitTimeout": WEBVIEW_ATOM_WAIT_MS,
             "appium:maxTypingFrequency": TYPING_KEYS_PER_MINUTE, "pageLoadStrategy": "eager", **KEYBOARD_CAPABILITIES}
 
 
@@ -254,9 +254,6 @@ def _no_keyboard_detail(last: dict) -> str:
 
 
 def _page_state(phone: Phone) -> Optional[str]:
-    contexts = list(phone.driver.contexts)
-    if not any(name.startswith(WEBVIEW_PREFIX) for name in contexts):
-        return f"no Safari web view (contexts {contexts})"
     try:
         state = phone.driver.execute_script(PAGE_READY_JS)
     except Exception as error:
