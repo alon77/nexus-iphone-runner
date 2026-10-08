@@ -60,7 +60,11 @@ def capabilities(udid: str, start_url: str) -> dict:  # kwargs-lint: ignore: dev
     return {"platformName": "iOS", "appium:automationName": "XCUITest", "browserName": "Safari",
             "appium:udid": udid, "appium:nativeWebTap": True, "appium:showSafariConsoleLog": True,
             "appium:safariInitialUrl": start_url, "appium:wdaLaunchTimeout": WDA_LAUNCH_TIMEOUT_MS,
-            "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_S, **KEYBOARD_CAPABILITIES}
+            "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_S, "appium:showXcodeLog": True, **KEYBOARD_CAPABILITIES}
+
+
+def prebuilt_wda_capabilities(app_path: str) -> dict:
+    return {"appium:usePreinstalledWDA": True, "appium:prebuiltWDAPath": app_path}
 
 
 @dataclass
