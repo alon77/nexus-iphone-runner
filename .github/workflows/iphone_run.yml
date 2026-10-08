@@ -62,6 +62,7 @@ jobs:
       - name: Boot the simulator, trust the run CA
         run: |
           stamp() { echo "$(date +%T) $1"; }
+          nohup top -l 0 -s 10 -o cpu -n 12 -stats pid,command,cpu,mem,state > "$RUN_DIR/out/top.log" 2>&1 &
           sudo xcode-select -s "$XCODE_APP"
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           UDID=$(xcrun simctl create iphone_run "$DEVICE_TYPE" "$IOS_RUNTIME")
