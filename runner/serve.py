@@ -1,6 +1,7 @@
 """serve — the runner side of a warm iPhone session (`guide iphone:run`). ONE Appium Safari session on the booted
 simulator lives for the whole session: the keyboard is proven once (preflight), the desk on Alon's machine is told
-the session is ready, then the runner long-polls the desk for specs. Each spec gets a clean Safari state, runs with
+the session is ready, then the runner long-polls the desk for specs. Each spec gets a clean Safari state and its
+runner proxies' asset cache checked against the dev origin (forward_proxy.REVALIDATE_PATH), runs with
 the harness verbs injected, and its out/ (results.json, shots, safari_console.json, its slice of appium.log) goes
 back to the desk as one tar.gz. Exits when the desk says stop or stays unreachable. Prints only counts.
 Run as `python -m runner.serve <run_dir>` on the runner; standalone apart from its sibling modules.
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import requests
 
-from .forward_proxy import TOKEN_HEADER
+from .forward_proxy import REVALIDATE_PATH, TOKEN_HEADER
 from .harness import (APPIUM_URL, Phone, Recorder, RunContext, capabilities, keyboard_preflight,
                       prebuilt_wda_capabilities, with_keyboard_typing)
 
@@ -30,6 +31,7 @@ HTTP_SLACK_S = 15
 CONNECT_TIMEOUT_S = 10
 DESK_LOST_AFTER_S = 120
 DESK_RETRY_S = 2
+CACHE_CHECK_TIMEOUT_S = 15
 LIBRARY_PATH_MARK = "site-packages"
 
 
@@ -98,6 +100,21 @@ def cleaned(phone) -> dict:
     return {"clean_s": round(time.monotonic() - started, 2), "clean_error": clean_error}
 
 
+def cache_check(origins: list, *, ca: Path) -> dict:
+    return {"urls": [f"https://{origin['host']}:{origin['port']}{REVALIDATE_PATH}" for origin in origins],
+            "verify": str(ca)}
+
+
+def _checked_cache(serving: dict) -> float:
+    started = time.monotonic()
+    check = serving.get("cache_check") or {"urls": []}
+    for url in check["urls"]:
+        answer = requests.post(url, verify=check["verify"], timeout=CACHE_CHECK_TIMEOUT_S)
+        if answer.status_code != OK:
+            raise RuntimeError(f"proxy cache check {url} answered {answer.status_code}: {answer.text[:200]}")
+    return round(time.monotonic() - started, 2)
+
+
 def _timed_spec(phone, job: dict) -> float:
     started = time.monotonic()
     exec(compile(job["spec_source"], job["spec_name"], "exec"), phone.spec_namespace())
@@ -116,11 +133,12 @@ def _results(serving: dict, *, job: dict) -> dict:
     recorder = Recorder(out_dir=job["out_dir"], spec=job["spec_name"])
     phone.recorder = recorder
     clean = serving.get("clean", {})
-    timings, error = {"clean_s": clean.get("clean_s"), "spec_s": None}, None
+    timings, error = {"clean_s": clean.get("clean_s"), "cache_check_s": None, "spec_s": None}, None
     if clean.get("clean_error"):
         error = f"Safari clean state before this spec failed, the spec did not run: {clean['clean_error']}"
     else:
         try:
+            timings["cache_check_s"] = _checked_cache(serving)
             timings["spec_s"] = _timed_spec(phone, job)
         except Exception as failure:
             error = _own_traceback(failure)
@@ -189,7 +207,8 @@ def main():
     try:
         desk.post_ready({"preflight": warm["preflight"], "timings": warm["timings"]})
         if warm["preflight"]["ok"]:
-            served = serve_jobs(desk, {**warm, "run_dir": run_dir, "appium_log": run_dir / "out" / "appium.log"})
+            served = serve_jobs(desk, {**warm, "run_dir": run_dir, "appium_log": run_dir / "out" / "appium.log",
+                                       "cache_check": cache_check(run["origins"], ca=run_dir / "ca.pem")})
     finally:
         warm["phone"].driver.quit()
     summary = {"preflight": warm["preflight"], "timings": warm["timings"], "served": served}
