@@ -30,7 +30,7 @@ HTTP_SLACK_S = 15
 CONNECT_TIMEOUT_S = 10
 DESK_LOST_AFTER_S = 120
 DESK_RETRY_S = 2
-TRACEBACK_FRAMES = 6
+LIBRARY_PATH_MARK = "site-packages"
 
 
 class DeskClient:
@@ -96,6 +96,13 @@ def _timed_spec(phone, job: dict) -> dict:
     return {"clean_s": round(cleaned - started, 2), "spec_s": round(time.monotonic() - cleaned, 2)}
 
 
+def _own_traceback(error: BaseException) -> str:
+    own_frames = [frame for frame in traceback.extract_tb(error.__traceback__)
+                  if LIBRARY_PATH_MARK not in frame.filename]
+    error_line = traceback.format_exception_only(error)[0].splitlines()[0]
+    return "".join(traceback.format_list(own_frames)) + error_line
+
+
 def _results(serving: dict, *, job: dict) -> dict:
     phone = serving["phone"]
     recorder = Recorder(out_dir=job["out_dir"], spec=job["spec_name"])
@@ -103,8 +110,8 @@ def _results(serving: dict, *, job: dict) -> dict:
     timings, error = {"clean_s": None, "spec_s": None}, None
     try:
         timings = _timed_spec(phone, job)
-    except Exception:
-        error = traceback.format_exc(limit=-TRACEBACK_FRAMES)
+    except Exception as failure:
+        error = _own_traceback(failure)
     (job["out_dir"] / "safari_console.json").write_text(json.dumps(phone.save_console(), indent=1))
     return {"spec": job["spec_name"], "preflight": serving.get("preflight", {"ok": True}), "expects": recorder.expects,
             "shots": recorder.shots, "tap_retries": recorder.tap_retries, "error": error, "timings": timings}
@@ -146,8 +153,8 @@ def _driver(start_url: str):
 def _preflight(phone) -> dict:
     try:
         return keyboard_preflight(phone)
-    except Exception:
-        return {"ok": False, "detail": f"preflight error: {traceback.format_exc(limit=-TRACEBACK_FRAMES)}"}
+    except Exception as failure:
+        return {"ok": False, "detail": f"preflight error: {_own_traceback(failure)}"}
 
 
 def _warm_phone(run: dict, out_dir: Path) -> dict:
