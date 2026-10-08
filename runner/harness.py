@@ -2,7 +2,8 @@
 experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, injected by run_spec:
 
     open(path)            Safari goes to the target host + path (or a full URL)
-    tap(css)              a real native tap on the element (nativeWebTap), so focus raises the keyboard
+    tap(css)              closes any Safari tip bubble (it swallows the next tap), then a real native tap on the
+                          element (nativeWebTap), so focus raises the keyboard
     type(css, text)       tap, then type through the on-screen keyboard
     keyboard_up()         True while a native XCUIElementTypeKeyboard is visible
     dismiss_keyboard()    hide the keyboard, wait until it is gone
@@ -33,6 +34,11 @@ KEYBOARD_WAIT_S = 8
 OSASCRIPT_TIMEOUT_S = 30
 POLL_S = 0.25
 NATIVE_CONTEXT = "NATIVE_APP"
+CSS_SELECTOR = "css selector"
+CLASS_NAME = "class name"
+IOS_CLASS_CHAIN = "-ios class chain"
+CLOSE_BUTTONS_CHAIN = '**/XCUIElementTypeButton[`name == "Close" OR label == "Close"`]'
+WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
 KEYBOARD_CLASS = "XCUIElementTypeKeyboard"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
@@ -114,9 +120,17 @@ class Phone:
     def open(self, path: str):
         self.driver.get(path if path.startswith("http") else self.base_url + path)
 
+    def close_safari_tips(self):
+        with self._native():
+            page_buttons = {button.id for button in
+                            self.driver.find_elements(IOS_CLASS_CHAIN, WEB_CONTENT_BUTTONS_CHAIN)}
+            for button in self.driver.find_elements(IOS_CLASS_CHAIN, CLOSE_BUTTONS_CHAIN):
+                if button.id not in page_buttons and button.is_displayed():
+                    button.click()
+
     def tap(self, css: str):
-        from selenium.webdriver.common.by import By
-        self.driver.find_element(By.CSS_SELECTOR, css).click()
+        self.close_safari_tips()
+        self.driver.find_element(CSS_SELECTOR, css).click()
 
     def type(self, css: str, text: str):  # kwargs-lint: ignore: spec verb, selector then text is the spec format
         self.tap(css)
@@ -125,9 +139,8 @@ class Phone:
             self.driver.execute_script("mobile: keys", {"keys": list(text)})
 
     def keyboard_up(self) -> bool:
-        from appium.webdriver.common.appiumby import AppiumBy
         with self._native():
-            keyboards = self.driver.find_elements(AppiumBy.CLASS_NAME, KEYBOARD_CLASS)
+            keyboards = self.driver.find_elements(CLASS_NAME, KEYBOARD_CLASS)
             return any(keyboard.is_displayed() for keyboard in keyboards)
 
     def wait_keyboard(self, *, up: bool) -> bool:
@@ -162,6 +175,10 @@ class Phone:
         self.recorder.shots.append(path.name)
         return path
 
+    def save_native_tree(self, name: str):
+        with self._native():
+            (self.recorder.out_dir / f"native_tree_{name}.xml").write_text(self.driver.page_source, encoding="utf-8")
+
     def spec_namespace(self) -> dict:
         verbs = {verb: getattr(self, verb) for verb in SPEC_VERBS}
         expect = lambda *fields, **named: self.recorder.record(Expectation(*fields, **named))  # noqa: E731
@@ -195,6 +212,7 @@ def _no_keyboard_detail(last: dict) -> str:
 
 def keyboard_preflight(phone: Phone) -> dict:
     phone.open("/")
+    phone.save_native_tree("first_page")
     phone.driver.execute_script(PROBE_INPUT_JS, PROBE_INPUT_ID)
     attempts = []
     for method in ("capabilities", "simulator_menu"):
