@@ -27,6 +27,7 @@ STOP = object()
 OK = 200
 GONE = 410
 FORBIDDEN = 403
+NOT_THE_DESK = 500
 NEXT_HOLD_S = 20
 HTTP_SLACK_S = 15
 CONNECT_TIMEOUT_S = 10
@@ -53,17 +54,22 @@ class DeskClient:
     def _connect_timeout(self) -> float:
         return min(CONNECT_TIMEOUT_S, self.patience["lost_after_s"])
 
+    def _answer(self, method: str, request: dict):
+        try:
+            answer = requests.request(method, self.url + request["path"], headers=self.headers,
+                                      timeout=(self._connect_timeout(), request.get("timeout", HTTP_SLACK_S)),
+                                      data=request.get("body"))
+        except requests.RequestException:
+            return None
+        return None if answer.status_code >= NOT_THE_DESK else answer
+
     def _call(self, method: str, request: dict):
         deadline = time.monotonic() + self.patience["lost_after_s"]
         while True:
-            try:
-                return requests.request(method, self.url + request["path"], headers=self.headers,
-                                        timeout=(self._connect_timeout(), request.get("timeout", HTTP_SLACK_S)),
-                                        data=request.get("body"))
-            except requests.RequestException:
-                if time.monotonic() >= deadline:
-                    return None
-                time.sleep(self.patience["retry_s"])
+            answer = self._answer(method, request)
+            if answer is not None or time.monotonic() >= deadline:
+                return answer
+            time.sleep(self.patience["retry_s"])
 
     def next_job(self):
         answer = self._call("GET", {"path": "/next", "timeout": NEXT_HOLD_S + HTTP_SLACK_S})
