@@ -26,6 +26,10 @@ jobs:
       DEVICE_TYPE: com.apple.CoreSimulator.SimDeviceType.iPhone-17
       RUN_DIR: ${{ github.workspace }}/iphone_run
       VENV: ${{ github.workspace }}/venv
+      PHONE_CACHE: ${{ github.workspace }}/settled_phone
+      APPIUM_DIR: ${{ github.workspace }}/appium
+      APPIUM: appium@3.8.0
+      XCUITEST: xcuitest@12.16.0
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -49,6 +53,44 @@ jobs:
           IPHONE_RUN_KEY: ${{ secrets.IPHONE_RUN_KEY }}
         run: '"$VENV/bin/python" runner/unpack.py "$RUN_DIR"'
 
+      - name: CPU per process into the artifact
+        run: |
+          nohup top -l 0 -s 10 -o cpu -n 12 -stats pid,command,cpu,mem,state > "$RUN_DIR/out/top.log" 2>&1 &
+
+      - name: Cache keys
+        id: keys
+        run: |
+          echo "phone=settled_phone-v1-$ImageOS-$ImageVersion-$(uname -m)-${IOS_RUNTIME##*.}-${DEVICE_TYPE##*.}" >> "$GITHUB_OUTPUT"
+          echo "appium=appium-v1-$ImageOS-$ImageVersion-$(uname -m)-$APPIUM-$XCUITEST" >> "$GITHUB_OUTPUT"
+          echo "APPIUM_HOME=$APPIUM_DIR/home" >> "$GITHUB_ENV"
+          echo "$APPIUM_DIR/node_modules/.bin" >> "$GITHUB_PATH"
+
+      # actions/cache v6.1.0
+      - name: Appium from the cache
+        id: appium_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.APPIUM_DIR }}
+          key: ${{ steps.keys.outputs.appium }}
+
+      # actions/cache v6.1.0
+      - name: Settled phone from the cache
+        id: phone_cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.PHONE_CACHE }}
+          key: ${{ steps.keys.outputs.phone }}
+
+      - name: Appium installs while the phone boots
+        run: |
+          [ -f "$APPIUM_DIR/installed" ] && exit 0
+          mkdir -p "$APPIUM_DIR"
+          nohup bash -c '
+            npm install --prefix "$APPIUM_DIR" --silent "$APPIUM" &&
+            appium driver install "$XCUITEST" &&
+            appium driver run xcuitest download-wda-sim --platform=ios --outdir="$APPIUM_DIR/wda" &&
+            touch "$APPIUM_DIR/installed" || touch "$RUN_DIR/appium_install_failed"' > "$RUN_DIR/out/appium_install.log" 2>&1 &
+
       - name: Target hosts to this Mac, throwaway certs
         run: |
           sudo tee -a /etc/hosts < "$RUN_DIR/hosts_lines" > /dev/null
@@ -59,35 +101,53 @@ jobs:
       - name: Runner proxies on the real ports
         run: sudo "$VENV/bin/python" runner/start_proxies.py "$RUN_DIR"
 
-      - name: Boot the simulator, trust the run CA
+      - name: Boot a settled phone, logging off, trust the run CA
         run: |
-          stamp() { echo "$(date +%T) $1"; }
-          nohup top -l 0 -s 10 -o cpu -n 12 -stats pid,command,cpu,mem,state > "$RUN_DIR/out/top.log" 2>&1 &
+          stamp() { echo "$(date +%T) $1" | tee -a "$RUN_DIR/out/boot_steps.txt"; }
           sudo xcode-select -s "$XCODE_APP"
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
           UDID=$(xcrun simctl create iphone_run "$DEVICE_TYPE" "$IOS_RUNTIME")
           echo "UDID=$UDID" >> "$GITHUB_ENV"
           stamp "created"
+          if [ -d "$PHONE_CACHE/data" ]; then
+            rsync -a "$PHONE_CACHE/data/" "$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/"
+            stamp "settled phone restored from the cache"
+          else
+            stamp "no settled phone cached for this image: a new phone, kept at the end once it settles"
+          fi
+          if xcrun simctl keychain "$UDID" add-root-cert "$RUN_DIR/ca.pem"; then CA_TRUSTED=1; stamp "run CA trusted before boot"; fi
           xcrun simctl boot "$UDID"
           xcrun simctl bootstatus "$UDID" -b
           stamp "booted"
+          sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.diagnosticd.plist && stamp "Mac diagnosticd off" || stamp "Mac diagnosticd could not be unloaded"
+          xcrun simctl spawn "$UDID" killall diagnosticd && stamp "phone diagnosticd off" || stamp "phone diagnosticd was not running"
+          [ -n "$CA_TRUSTED" ] || { xcrun simctl keychain "$UDID" add-root-cert "$RUN_DIR/ca.pem"; stamp "run CA trusted after boot, refused before"; }
           xcrun simctl spawn "$UDID" defaults write com.apple.WebUI AutoFillPasswords -int 0
-          xcrun simctl keychain "$UDID" add-root-cert "$RUN_DIR/ca.pem"
-          stamp "autofill off, run CA trusted"
+          stamp "autofill off"
           open -a Simulator --args -CurrentDeviceUDID "$UDID"
           xcrun simctl launch "$UDID" com.apple.mobilesafari
           stamp "Simulator app open, Safari warming while Appium installs"
 
       - name: Appium
+        id: appium
         run: |
-          npm install --global --silent appium@3.8.0
-          appium driver install xcuitest@12.16.0
-          appium driver run xcuitest download-wda-sim --platform=ios --outdir="$RUN_DIR/wda"
-          echo "WDA_APP=$(find "$RUN_DIR/wda" -maxdepth 2 -name 'WebDriverAgentRunner-Runner.app' | head -1)" >> "$GITHUB_ENV"
+          stamp() { echo "$(date +%T) $1" | tee -a "$RUN_DIR/out/boot_steps.txt"; }
+          for attempt in $(seq 2400); do
+            [ -f "$APPIUM_DIR/installed" ] && break
+            [ -f "$RUN_DIR/appium_install_failed" ] && { echo "Appium install failed: out/appium_install.log in the artifact"; exit 1; }
+            sleep 0.25
+          done
+          [ -f "$APPIUM_DIR/installed" ] || { echo "Appium install still running after 600s"; exit 1; }
+          stamp "Appium installed"
+          echo "WDA_APP=$(find "$APPIUM_DIR/wda" -maxdepth 2 -name 'WebDriverAgentRunner-Runner.app' | head -1)" >> "$GITHUB_ENV"
           xcrun simctl terminate "$UDID" com.apple.mobilesafari
           nohup appium --port 4723 --log-no-colors --log "$RUN_DIR/out/appium.log" > /dev/null 2>&1 &
-          for attempt in $(seq 240); do curl -sf http://127.0.0.1:4723/status > /dev/null && exit 0; sleep 0.25; done
+          for attempt in $(seq 240); do curl -sf http://127.0.0.1:4723/status > /dev/null && { stamp "Appium answering"; exit 0; }; sleep 0.25; done
           echo "Appium never answered /status"; exit 1
+
+      - name: Phone settled
+        id: settled
+        run: '"$VENV/bin/python" -m runner.settle "$RUN_DIR"'
 
       - name: Serve specs
         timeout-minutes: 100
@@ -110,3 +170,26 @@ jobs:
           path: iphone_run/out.sealed
           retention-days: 1
           if-no-files-found: warn
+
+      - name: Keep the settled phone for the next session
+        if: always() && steps.phone_cache.outputs.cache-hit != 'true' && steps.settled.outcome == 'success'
+        run: |
+          xcrun simctl shutdown "$UDID"
+          mkdir -p "$PHONE_CACHE"
+          rsync -a --delete "$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/" "$PHONE_CACHE/data/"
+
+      # actions/cache v6.1.0
+      - name: Save the settled phone
+        if: always() && steps.phone_cache.outputs.cache-hit != 'true' && steps.settled.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.PHONE_CACHE }}
+          key: ${{ steps.keys.outputs.phone }}
+
+      # actions/cache v6.1.0
+      - name: Save Appium
+        if: always() && steps.appium_cache.outputs.cache-hit != 'true' && steps.appium.outcome == 'success'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.APPIUM_DIR }}
+          key: ${{ steps.keys.outputs.appium }}
