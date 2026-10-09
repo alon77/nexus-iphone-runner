@@ -21,6 +21,7 @@ import requests
 from .forward_proxy import REVALIDATE_PATH, TOKEN_HEADER
 from .harness import (APPIUM_URL, Phone, Recorder, RunContext, capabilities, keyboard_preflight,
                       prebuilt_wda_capabilities, with_keyboard_typing)
+from .settle import BOOT_STEPS
 
 STOP = object()
 OK = 200
@@ -198,6 +199,11 @@ def _warm_phone(run: dict, out_dir: Path) -> dict:
     return {"phone": phone, "preflight": preflight, "timings": timings, "clean": cleaned(phone)}
 
 
+def _boot_steps(out_dir: Path) -> list:
+    steps = out_dir / BOOT_STEPS
+    return steps.read_text().splitlines() if steps.exists() else []
+
+
 def main():
     run_dir = Path(sys.argv[1])
     run = json.loads((run_dir / "run.json").read_text())
@@ -205,7 +211,8 @@ def main():
     warm = _warm_phone(run, run_dir / "out")
     served = 0
     try:
-        desk.post_ready({"preflight": warm["preflight"], "timings": warm["timings"]})
+        desk.post_ready({"preflight": warm["preflight"], "timings": warm["timings"],
+                         "boot_steps": _boot_steps(run_dir / "out")})
         if warm["preflight"]["ok"]:
             served = serve_jobs(desk, {**warm, "run_dir": run_dir, "appium_log": run_dir / "out" / "appium.log",
                                        "cache_check": cache_check(run["origins"], ca=run_dir / "ca.pem")})
