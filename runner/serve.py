@@ -20,7 +20,7 @@ import requests
 
 from .forward_proxy import REVALIDATE_PATH, TOKEN_HEADER
 from .harness import (APPIUM_URL, Phone, Recorder, RunContext, capabilities, keyboard_preflight,
-                      prebuilt_wda_capabilities, with_keyboard_typing)
+                      prebuilt_wda_capabilities, with_keyboard_typing, with_own_page_wait)
 from .settle import BOOT_STEPS
 
 STOP = object()
@@ -185,7 +185,7 @@ def _driver(start_url: str):
     options = AppiumOptions()
     options.load_capabilities({**capabilities(os.environ["UDID"], start_url),
                                **prebuilt_wda_capabilities(os.environ["WDA_APP"])})
-    return with_keyboard_typing(webdriver.Remote(APPIUM_URL, options=options))
+    return with_own_page_wait(with_keyboard_typing(webdriver.Remote(APPIUM_URL, options=options)))
 
 
 def _preflight(phone) -> dict:
