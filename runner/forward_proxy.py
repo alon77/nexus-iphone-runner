@@ -9,7 +9,9 @@ Two uses of the same hop (`guide iphone:tunnel`):
 The dev origin sends no-store, so Safari caches nothing and every asset would cross the tunnel on every load. The
 runner proxy keeps every GET 200 that carries an ETag and no Set-Cookie (never a Range) for the session; before each
 spec the runner POSTs REVALIDATE_PATH, the proxy sends every cached path + ETag to the gate's VALIDATE_PATH in one
-trip, the gate asks its origin locally, and every entry the origin no longer confirms is dropped.
+trip, the gate asks its origin locally, and every entry the origin no longer confirms is dropped. A static asset
+(STATIC_ASSET_SUFFIXES) is kept under its path alone: nginx serves the file whatever its query, and alpha's local
+stylesheets carry a ?v<time()> that changes on every page load.
 
 Standalone on purpose: the runner repo carries this file as-is, so it imports nothing from lib/.
 """
@@ -37,6 +39,8 @@ VALIDATE_PATH = "/__nexus/validate"
 REVALIDATE_PATH = "/__nexus/revalidate"
 CACHE_ENTRY_LIMIT_BYTES = 16 * 1024 * 1024
 UNCACHED_RESPONSE_HEADERS = {"content-length"}
+STATIC_ASSET_SUFFIXES = (".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".woff", ".woff2",
+                         ".ttf", ".mp4", ".webm")
 CHUNK_BYTES = 65536
 HOP_BY_HOP_HEADERS = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
                       "transfer-encoding", "upgrade", "host"}
@@ -129,16 +133,20 @@ def _cacheable(upstream) -> bool:
     return upstream.status == OK and "ETag" in upstream.headers and "Set-Cookie" not in upstream.headers
 
 
+def _cache_key(request: web.Request) -> str:
+    return request.path if request.path.endswith(STATIC_ASSET_SUFFIXES) else request.path_qs
+
+
 def _keep(request: web.Request, answered: dict):
     upstream, body = answered["upstream"], answered["body"]
     headers = [(name, value) for name, value in _downstream_headers(upstream.headers).items()
                if name.lower() not in UNCACHED_RESPONSE_HEADERS]
-    request.app[CACHE_KEY][request.path_qs] = {"headers": headers, "body": body, "etag": upstream.headers["ETag"],
+    request.app[CACHE_KEY][_cache_key(request)] = {"headers": headers, "body": body, "etag": upstream.headers["ETag"],
                                                "accept_encoding": request.headers.get("Accept-Encoding", "")}
 
 
 def _from_cache(request: web.Request) -> Optional[web.Response]:
-    entry = request.app[CACHE_KEY].get(request.path_qs) if _cache_candidate(request) else None
+    entry = request.app[CACHE_KEY].get(_cache_key(request)) if _cache_candidate(request) else None
     if entry is None:
         return None
     print(f"{time.strftime('%H:%M:%S')} {request.method} {request.path} {OK} cache {len(entry['body'])}B", flush=True)
