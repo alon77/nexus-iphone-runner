@@ -18,7 +18,7 @@ from pathlib import Path
 
 import requests
 
-from .forward_proxy import REVALIDATE_PATH, TOKEN_HEADER
+from .forward_proxy import REVALIDATE_PATH, RUNNER_HEADER, TOKEN_HEADER
 from .harness import (APPIUM_URL, Phone, Recorder, RunContext, capabilities, keyboard_preflight,
                       prebuilt_wda_capabilities, with_keyboard_typing, with_own_page_wait)
 from .settle import BOOT_STEPS
@@ -38,9 +38,9 @@ LIBRARY_PATH_MARK = "site-packages"
 
 
 class DeskClient:
-    def __init__(self, url: str, *, token: str):
+    def __init__(self, url: str, *, token: str, runner_id=None):
         self.url = url.rstrip("/")
-        self.headers = {TOKEN_HEADER: token}
+        self.headers = {TOKEN_HEADER: token, **({RUNNER_HEADER: runner_id} if runner_id else {})}
         self.patience = {"lost_after_s": DESK_LOST_AFTER_S, "retry_s": DESK_RETRY_S}
 
     def with_patience(self, patience: dict) -> "DeskClient":
@@ -213,7 +213,7 @@ def _boot_steps(out_dir: Path) -> list:
 def main():
     run_dir = Path(sys.argv[1])
     run = json.loads((run_dir / "run.json").read_text())
-    desk = DeskClient(run["desk_url"], token=run["token"])
+    desk = DeskClient(run["desk_url"], token=run["token"], runner_id=run["runner_id"])
     warm = _warm_phone(run, run_dir / "out")
     served = 0
     try:
