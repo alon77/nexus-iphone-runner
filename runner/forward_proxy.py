@@ -30,6 +30,7 @@ from multidict import CIMultiDict
 TOKEN_HEADER = "X-Nexus-Run-Token"
 OK = 200
 NOT_MODIFIED = 304
+TUNNEL_EDGE_SENDS_UNCOMPRESSED = {"Accept-Encoding": "identity"}
 FORBIDDEN = 403
 BAD_GATEWAY = 502
 VALIDATE_PATH = "/__nexus/validate"
@@ -113,10 +114,11 @@ async def _forward_websocket(request: web.Request, headers) -> web.WebSocketResp
         return downstream
 
 
-def _print_timing(request: web.Request, status: int, *, started: float, headers_at: float, sent: int):
-    finished = time.monotonic()
-    print(f"{time.strftime('%H:%M:%S')} {request.method} {request.path} {status} "
-          f"headers {(headers_at - started) * 1000:.0f}ms total {(finished - started) * 1000:.0f}ms {sent}B", flush=True)
+def _print_timing(request: web.Request, timing: dict):
+    finished, started = time.monotonic(), timing["started"]
+    print(f"{time.strftime('%H:%M:%S')} {request.method} {request.path} {timing['status']} "
+          f"headers {(timing['headers_at'] - started) * 1000:.0f}ms total {(finished - started) * 1000:.0f}ms "
+          f"{timing['sent']}B", flush=True)
 
 
 def _cache_candidate(request: web.Request) -> bool:
@@ -127,7 +129,8 @@ def _cacheable(upstream) -> bool:
     return upstream.status == OK and "ETag" in upstream.headers and "Set-Cookie" not in upstream.headers
 
 
-def _keep(request: web.Request, upstream, body: bytes):
+def _keep(request: web.Request, answered: dict):
+    upstream, body = answered["upstream"], answered["body"]
     headers = [(name, value) for name, value in _downstream_headers(upstream.headers).items()
                if name.lower() not in UNCACHED_RESPONSE_HEADERS]
     request.app[CACHE_KEY][request.path_qs] = {"headers": headers, "body": body, "etag": upstream.headers["ETag"],
@@ -155,7 +158,7 @@ async def _relay(request: web.Request, upstream) -> tuple:
         chunks = chunks + [chunk] if keeping else []
     await response.write_eof()
     if keeping:
-        _keep(request, upstream, b"".join(chunks))
+        _keep(request, {"upstream": upstream, "body": b"".join(chunks)})
     return response, sent
 
 
@@ -167,7 +170,8 @@ async def _forward_http(request: web.Request, headers) -> web.StreamResponse:
                                                 data=body, allow_redirects=False, ssl=_ssl_for(route)) as upstream:
         headers_at = time.monotonic()
         response, sent = await _relay(request, upstream)
-        _print_timing(request, upstream.status, started=started, headers_at=headers_at, sent=sent)
+        _print_timing(request, {"status": upstream.status, "started": started, "headers_at": headers_at,
+                                "sent": sent})
         return response
 
 
@@ -184,7 +188,8 @@ async def _forward(request: web.Request):
         return web.Response(status=BAD_GATEWAY, text=f"upstream unreachable: {type(error).__name__}")
 
 
-async def _still_fresh(app: web.Application, path: str, entry: dict) -> bool:
+async def _still_fresh(app: web.Application, cached: tuple) -> bool:
+    path, entry = cached
     route = app[ROUTE_KEY]
     if not path.startswith("/"):
         return False
@@ -202,13 +207,13 @@ async def _validate(request: web.Request) -> web.Response:
     if not _token_accepted(request.app[ROUTE_KEY], request):
         return web.Response(status=FORBIDDEN, text="forbidden")
     entries = await request.json()
-    fresh = await asyncio.gather(*(_still_fresh(request.app, path, entry) for path, entry in entries.items()))
+    fresh = await asyncio.gather(*(_still_fresh(request.app, cached) for cached in entries.items()))
     return web.json_response(dict(zip(entries, fresh)))
 
 
 async def _confirmed_paths(app: web.Application, entries: dict) -> dict:
     route = app[ROUTE_KEY]
-    headers = {"Host": route.upstream_host, TOKEN_HEADER: route.added_token or ""}
+    headers = {"Host": route.upstream_host, TOKEN_HEADER: route.added_token or "", **TUNNEL_EDGE_SENDS_UNCOMPRESSED}
     try:
         async with app[SESSION_KEY].post(route.upstream + VALIDATE_PATH, json=entries, headers=headers,
                                          ssl=_ssl_for(route)) as answer:
