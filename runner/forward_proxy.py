@@ -30,6 +30,7 @@ from aiohttp import web
 from multidict import CIMultiDict
 
 TOKEN_HEADER = "X-Nexus-Run-Token"
+RUNNER_HEADER = "X-Nexus-Runner"
 OK = 200
 NOT_MODIFIED = 304
 TUNNEL_EDGE_SENDS_UNCOMPRESSED = {"Accept-Encoding": "identity"}
