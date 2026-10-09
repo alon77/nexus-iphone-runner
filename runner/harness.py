@@ -38,6 +38,7 @@ NO_SYSLOG_PREDICATE = 'process == "nexus_no_such_process"'
 MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
 COLD_SAFARI_READY_WAIT_S = 180
+OPEN_WAIT_S = 15
 SAFARI_SETTLED_S = 2.0
 TYPING_KEYS_PER_MINUTE = 600
 OSASCRIPT_TIMEOUT_S = 30
@@ -70,7 +71,8 @@ FOCUS_STATE_JS = ("const element = document.querySelector(arguments[0]);"
                   " return {focusable: element.matches('input, textarea, select, [contenteditable]:not([contenteditable=\\'false\\'])'),"
                   " focused: document.activeElement === element};")
 BLUR_JS = "if (document.activeElement) document.activeElement.blur();"
-PAGE_READY_JS = "return document.readyState;"
+LEAVE_PAGE_JS = "window.nexus_left_page = true;"
+PAGE_READY_JS = "return window.nexus_left_page ? 'the old page' : document.readyState;"
 READY_STATES = ("interactive", "complete")
 PROBE_PRESENT_JS = "return !!document.getElementById(arguments[0]);"
 CLEAN_PATH = "/robots.txt"
@@ -157,8 +159,18 @@ class Phone:
         finally:
             self.driver.switch_to.context(web_context)
 
-    def open(self, path: str):
+    def navigate(self, path: str):
+        try:
+            self.driver.execute_script(LEAVE_PAGE_JS)
+        except Exception:
+            pass
         self.driver.get(path if path.startswith("http") else self.base_url + path)
+
+    def open(self, path: str):
+        self.navigate(path)
+        not_loaded = _waited(lambda: _page_loading(self), OPEN_WAIT_S)
+        if not_loaded:
+            raise TimeoutError(f"open {path}: {not_loaded} after {OPEN_WAIT_S}s")
 
     def clean_state(self):
         self.open(CLEAN_PATH)
@@ -278,12 +290,17 @@ def _no_keyboard_detail(last: dict) -> str:
             f"visualViewport shrank {last['shrink_px']:.0f}px (need {MIN_KEYBOARD_SHRINK_PX})")
 
 
+def _page_loading(phone: Phone) -> Optional[str]:
+    state = phone.driver.execute_script(PAGE_READY_JS)
+    return None if state in READY_STATES else f"page still {state}"
+
+
 def _page_state(phone: Phone) -> Optional[str]:
     asked = time.monotonic()
-    state = phone.driver.execute_script(PAGE_READY_JS)
+    loading = _page_loading(phone)
     answer_s = time.monotonic() - asked
-    if state not in READY_STATES:
-        return f"page still {state}"
+    if loading:
+        return loading
     return f"Safari still settling ({answer_s:.1f}s per script)" if answer_s > SAFARI_SETTLED_S else None
 
 
@@ -294,8 +311,8 @@ def _reason_or_none(check) -> Optional[str]:
         return f"page unreachable ({type(error).__name__})"
 
 
-def _waited(check) -> Optional[str]:
-    deadline = time.monotonic() + COLD_SAFARI_READY_WAIT_S
+def _waited(check, wait_s: float) -> Optional[str]:
+    deadline = time.monotonic() + wait_s
     seen = _reason_or_none(check)
     while seen and time.monotonic() < deadline:
         time.sleep(POLL_S)
@@ -315,11 +332,11 @@ def _safari_not_open(phone: Phone, seen: str) -> dict:
 
 
 def keyboard_preflight(phone: Phone) -> dict:
-    phone.open("/")
-    not_open = _waited(lambda: _page_state(phone))
+    phone.navigate("/")
+    not_open = _waited(lambda: _page_state(phone), COLD_SAFARI_READY_WAIT_S)
     if not not_open:
         phone.driver.execute_script(PROBE_INPUT_JS, PROBE_INPUT_ID)
-        not_open = _waited(lambda: _probe_missing(phone))
+        not_open = _waited(lambda: _probe_missing(phone), COLD_SAFARI_READY_WAIT_S)
     if not_open:
         return _safari_not_open(phone, not_open)
     return _keyboard_attempts(phone)
