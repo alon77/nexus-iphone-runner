@@ -1,6 +1,7 @@
 """serve — the runner side of a warm iPhone session (`guide iphone:run`). ONE Appium Safari session on the booted
-simulator lives for the whole session: the keyboard is proven once (preflight), the desk on Alon's machine is told
-the session is ready, then the runner long-polls the desk for specs. Each spec gets a clean Safari state and its
+simulator lives for the whole session: the keyboard is proven once (preflight), the static assets the session already
+served (the sealed warm_paths, filled on a relay) are fetched through the runner's own proxies so its cache is warm,
+the desk on Alon's machine is told the session is ready, then the runner long-polls the desk for specs. Each spec gets a clean Safari state and its
 runner proxies' asset cache checked against the dev origin (forward_proxy.REVALIDATE_PATH), runs with
 the harness verbs injected, and its out/ (results.json, shots, safari_console.json, its slice of appium.log) goes
 back to the desk as one tar.gz. Exits when the desk says stop or stays unreachable. Prints only counts.
@@ -14,6 +15,7 @@ import sys
 import tarfile
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -34,6 +36,9 @@ CONNECT_TIMEOUT_S = 10
 DESK_LOST_AFTER_S = 120
 DESK_RETRY_S = 2
 CACHE_CHECK_TIMEOUT_S = 15
+ASSET_TIMEOUT_S = 30
+ASSET_WARMERS = 8
+SAFARI_ACCEPT_ENCODING = {"Accept-Encoding": "gzip, deflate, br"}
 LIBRARY_PATH_MARK = "site-packages"
 
 
@@ -120,6 +125,31 @@ def _checked_cache(serving: dict) -> float:
         if answer.status_code != OK:
             raise RuntimeError(f"proxy cache check {url} answered {answer.status_code}: {answer.text[:200]}")
     return round(time.monotonic() - started, 2)
+
+
+def asset_warming(run: dict, *, ca: Path) -> dict:
+    hosts = {str(origin["port"]): origin["host"] for origin in run["origins"]}
+    return {"urls": [f"https://{hosts[port]}:{port}{path}"
+                     for port, paths in run["warm_paths"].items() if port in hosts for path in paths],
+            "verify": str(ca)}
+
+
+def _warmed(url: str, *, verify) -> bool:
+    try:
+        with requests.get(url, headers=SAFARI_ACCEPT_ENCODING, verify=verify, stream=True,
+                          timeout=(CONNECT_TIMEOUT_S, ASSET_TIMEOUT_S)) as answer:
+            answer.raw.read()
+            return answer.status_code == OK
+    except requests.RequestException:
+        return False
+
+
+def warm_asset_cache(warming: dict) -> dict:
+    started = time.monotonic()
+    with ThreadPoolExecutor(ASSET_WARMERS) as pool:
+        warmed = sum(pool.map(lambda url: _warmed(url, verify=warming["verify"]), warming["urls"]))
+    return {"asset_warm_s": round(time.monotonic() - started, 1), "assets_warmed": warmed,
+            "assets_missed": len(warming["urls"]) - warmed}
 
 
 def _timed_spec(phone, job: dict) -> float:
@@ -215,6 +245,7 @@ def main():
     run = json.loads((run_dir / "run.json").read_text())
     desk = DeskClient(run["desk_url"], token=run["token"], runner_id=run["runner_id"])
     warm = _warm_phone(run, run_dir / "out")
+    warm["timings"].update(warm_asset_cache(asset_warming(run, ca=run_dir / "ca.pem")))
     served = 0
     try:
         desk.post_ready({"preflight": warm["preflight"], "timings": warm["timings"],
