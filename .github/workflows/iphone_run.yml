@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   run:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       XCODE_APP: /Applications/Xcode_26.2.app
