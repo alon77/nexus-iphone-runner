@@ -39,6 +39,7 @@ MIN_KEYBOARD_SHRINK_PX = 200
 KEYBOARD_WAIT_S = 8
 COLD_SAFARI_READY_WAIT_S = 180
 OPEN_WAIT_S = 15
+APPIUM_PAGE_LOAD_WAIT_S = 1
 SAFARI_SETTLED_S = 2.0
 TYPING_KEYS_PER_MINUTE = 600
 OSASCRIPT_TIMEOUT_S = 30
@@ -103,6 +104,11 @@ def prebuilt_wda_capabilities(app_path: str) -> dict:
 
 def with_keyboard_typing(driver):
     driver.command_executor.add_command(KEYBOARD_TYPE_COMMAND, *KEYBOARD_TYPE_ROUTE)
+    return driver
+
+
+def with_own_page_wait(driver):
+    driver.set_page_load_timeout(APPIUM_PAGE_LOAD_WAIT_S)
     return driver
 
 
