@@ -19,7 +19,7 @@ permissions:
 jobs:
   run:
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
       XCODE_APP: /Applications/Xcode_26.2.app
       IOS_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-2
@@ -154,7 +154,7 @@ jobs:
         run: '"$VENV/bin/python" -m runner.settle "$RUN_DIR"'
 
       - name: Serve specs
-        timeout-minutes: 100
+        timeout-minutes: 330
         run: '"$VENV/bin/python" -m runner.serve "$RUN_DIR"'
 
       - name: Seal the output
