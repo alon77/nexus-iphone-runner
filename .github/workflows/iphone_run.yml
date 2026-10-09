@@ -42,6 +42,9 @@ jobs:
         with:
           node-version: '22.23.2'
 
+      - name: Mac Spotlight off
+        run: sudo mdutil -a -i off || echo "mdutil refused to turn Spotlight off"
+
       - name: Python packages
         run: |
           python -m venv "$VENV"
@@ -120,7 +123,8 @@ jobs:
           xcrun simctl bootstatus "$UDID" -b
           stamp "booted"
           sudo launchctl unload -w /System/Library/LaunchDaemons/com.apple.diagnosticd.plist && stamp "Mac diagnosticd off" || stamp "Mac diagnosticd could not be unloaded"
-          xcrun simctl spawn "$UDID" killall diagnosticd && stamp "phone diagnosticd off" || stamp "phone diagnosticd was not running"
+          PHONE_LAUNCHD=$(pgrep -f "launchd_sim.*$UDID" | head -1)
+          pkill -P "$PHONE_LAUNCHD" -x diagnosticd && stamp "phone diagnosticd off" || stamp "no diagnosticd under the phone's launchd_sim ($PHONE_LAUNCHD)"
           [ -n "$CA_TRUSTED" ] || { xcrun simctl keychain "$UDID" add-root-cert "$RUN_DIR/ca.pem"; stamp "run CA trusted after boot, refused before"; }
           xcrun simctl spawn "$UDID" defaults write com.apple.WebUI AutoFillPasswords -int 0
           stamp "autofill off"
@@ -172,7 +176,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Keep the settled phone for the next session
-        if: always() && steps.phone_cache.outputs.cache-hit != 'true' && steps.settled.outcome == 'success'
+        if: always() && steps.phone_cache.outputs.cache-hit != 'true' && steps.settled.outcome != 'skipped'
         run: |
           xcrun simctl shutdown "$UDID"
           mkdir -p "$PHONE_CACHE"
@@ -180,7 +184,7 @@ jobs:
 
       # actions/cache v6.1.0
       - name: Save the settled phone
-        if: always() && steps.phone_cache.outputs.cache-hit != 'true' && steps.settled.outcome == 'success'
+        if: always() && steps.phone_cache.outputs.cache-hit != 'true' && steps.settled.outcome != 'skipped'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ env.PHONE_CACHE }}
