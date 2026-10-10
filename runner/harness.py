@@ -14,7 +14,8 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
     js(script)            run JavaScript in the page, `return` hands a value back (document.cookie, input values)
     swipe(css, from_share, to_share)   a real horizontal finger drag at the vertical middle of the element's visible
                           part, from/to a share of the screen width (0 = left edge, 1 = right edge) — 0 to 0.7 is
-                          the left-edge swipe iPhone Safari turns into back
+                          the left-edge swipe iPhone Safari turns into back. The finger is an AXe HID swipe on the
+                          simulator: XCTest's synthesized drags never trigger Safari's back gesture
     expect(name, condition, detail)   one red/green line in results.json
 
 Appium never leaks into a spec. Once per session, before any spec, keyboard_preflight proves the software
@@ -22,6 +23,7 @@ keyboard comes up; after the preflight and after each spec's result goes back, c
 and storage, so every spec starts clean and the wipe is never inside a timed run.
 """
 
+import os
 import subprocess
 import time
 from contextlib import contextmanager
@@ -62,8 +64,9 @@ PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
 SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js", "swipe")
 WEB_VIEW_CLASS = "XCUIElementTypeWebView"
-SWIPE_PRESS_S = 0
-SWIPE_FINGER_PT_PER_S = 900
+SIMULATOR_UDID_ENV = "UDID"
+SWIPE_DURATION_S = 0.3
+AXE_TIMEOUT_S = 30
 SWIPE_SETTLE_S = 1.0
 VIEWPORT_JS = ("return {visual_height: window.visualViewport.height, visual_offset_top: window.visualViewport.offsetTop,"
                " inner_height: window.innerHeight, inner_width: window.innerWidth, scroll_y: window.scrollY};")
@@ -266,9 +269,10 @@ class Phone:
             visible_top = max(box["top"], 0)
             visible_bottom = min(box["bottom"], web_view["height"])
             y = web_view["y"] + (visible_top + visible_bottom) / 2
-            self.driver.execute_script("mobile: dragFromToWithVelocity", {
-                "pressDuration": SWIPE_PRESS_S, "holdDuration": SWIPE_PRESS_S, "velocity": SWIPE_FINGER_PT_PER_S,
-                "fromX": round(from_share * last_x), "fromY": y, "toX": round(to_share * last_x), "toY": y})
+        subprocess.run(["axe", "swipe", "--start-x", str(round(from_share * last_x)), "--start-y", str(y),
+                        "--end-x", str(round(to_share * last_x)), "--end-y", str(y),
+                        "--duration", str(SWIPE_DURATION_S), "--udid", os.environ[SIMULATOR_UDID_ENV]],
+                       check=True, capture_output=True, text=True, timeout=AXE_TIMEOUT_S)
         time.sleep(SWIPE_SETTLE_S)
 
     def shot(self, name: str) -> Path:
