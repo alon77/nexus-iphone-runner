@@ -18,6 +18,9 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
                           Simulator's own touch builder; a drag starting within 20pt of a screen edge carries that
                           edge's flag, as the iPhone digitizer marks it. XCTest's synthesized drags never trigger
                           Safari's back gesture
+    safari_bottom_bar()   where Safari's own bottom bar starts, in the page's CSS px (same axis as rect()):
+                          {top, web_view_bottom, screen_bottom}, None when Safari shows no bottom bar; read off the
+                          native tree, mapped through a fixed probe element of known CSS height
     expect(name, condition, detail)   one red/green line in results.json
 
 Appium never leaks into a spec. Once per session, before any spec, keyboard_preflight proves the software
@@ -28,6 +31,7 @@ and storage, so every spec starts clean and the wipe is never inside a timed run
 import os
 import subprocess
 import time
+import xml.etree.ElementTree as ElementTree
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,12 +68,24 @@ GONE_ELEMENT_ERROR = "StaleElementReferenceException"
 WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
-SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js", "swipe")
+SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js", "swipe",
+              "safari_bottom_bar")
 WEB_VIEW_CLASS = "XCUIElementTypeWebView"
 SIMULATOR_UDID_ENV = "UDID"
 FINGER_TIMEOUT_S = 10
 SAFARI_EDGE_ZONE_PT = 20
 SWIPE_SETTLE_S = 1.0
+ACCESSIBILITY_ID = "accessibility id"
+BAR_PROBE_ID = "nexus_bar_probe"
+BAR_PROBE_CSS_HEIGHT = 100
+BAR_ZONE_FROM_SHARE = 0.5
+BAR_MAX_HEIGHT_SHARE = 0.25
+NOT_A_BAR_CLASSES = (WEB_VIEW_CLASS, KEYBOARD_CLASS)
+BAR_PROBE_JS = ("const probe = document.createElement('button'); probe.id = arguments[0];"
+                " probe.setAttribute('aria-label', arguments[0]);"
+                " probe.style.cssText = 'position:fixed;top:0;left:0;width:100px;height:' + arguments[1] + 'px;"
+                "margin:0;padding:0;border:0;background:transparent;z-index:2147483647';"
+                " document.body.appendChild(probe); return probe.getBoundingClientRect().top;")
 VIEWPORT_JS = ("return {visual_height: window.visualViewport.height, visual_offset_top: window.visualViewport.offsetTop,"
                " inner_height: window.innerHeight, inner_width: window.innerWidth, scroll_y: window.scrollY};")
 RECT_JS = ("const element = document.querySelector(arguments[0]); if (!element) return null;"
@@ -122,6 +138,28 @@ def with_keyboard_typing(driver):
 def with_own_page_wait(driver):
     driver.set_page_load_timeout(APPIUM_PAGE_LOAD_WAIT_S)
     return driver
+
+
+def bottom_bar_top_pt(native_xml: str, *, screen_height: float) -> Optional[float]:
+    tops = []
+
+    def walk(node):
+        if node.get("type") in NOT_A_BAR_CLASSES:
+            return
+        y, height = float(node.get("y", -1)), float(node.get("height", 0))
+        low_and_slim = y >= screen_height * BAR_ZONE_FROM_SHARE and 0 < height <= screen_height * BAR_MAX_HEIGHT_SHARE
+        if node.get("visible") == "true" and low_and_slim:
+            tops.append(y)
+        for child in node:
+            walk(child)
+
+    walk(ElementTree.fromstring(native_xml))
+    return min(tops) if tops else None
+
+
+def css_y(native_y: float, probe: dict) -> float:
+    css_per_point = probe["css_height"] / probe["native_height"]
+    return probe["css_top"] + (native_y - probe["native_y"]) * css_per_point
 
 
 @dataclass
@@ -297,6 +335,30 @@ class Phone:
         visible_middle = (max(box["top"], 0) + min(box["bottom"], web_view["height"])) / 2
         return SwipeLine(start_x=web_view["x"] + span[0] * last_x, end_x=web_view["x"] + span[1] * last_x,
                          y=web_view["y"] + visible_middle, screen=screen)
+
+    def _bar_probe(self) -> dict:
+        css_top = self.driver.execute_script(BAR_PROBE_JS, BAR_PROBE_ID, BAR_PROBE_CSS_HEIGHT)
+        try:
+            with self._native():
+                native = self.driver.find_element(ACCESSIBILITY_ID, BAR_PROBE_ID).rect
+        finally:
+            self.driver.execute_script(REMOVE_PROBE_JS, BAR_PROBE_ID)
+        return {"css_top": css_top, "css_height": BAR_PROBE_CSS_HEIGHT, "native_y": native["y"],
+                "native_height": native["height"]}
+
+    def safari_bottom_bar(self):
+        probe = self._bar_probe()
+        with self._native():
+            screen = self.driver.get_window_size()
+            web_view = self.driver.find_element(CLASS_NAME, WEB_VIEW_CLASS).rect
+            native_xml = self.driver.page_source
+        (self.recorder.out_dir / f"native_tree_bar_{len(self.recorder.shots):02d}.xml").write_text(native_xml, encoding="utf-8")
+        bar_top = bottom_bar_top_pt(native_xml, screen_height=screen["height"])
+        if bar_top is None:
+            return None
+        return {"top": css_y(bar_top, probe), "web_view_bottom": css_y(web_view["y"] + web_view["height"], probe),
+                "screen_bottom": css_y(screen["height"], probe), "native_top": bar_top,
+                "screen_height_pt": screen["height"]}
 
     def shot(self, name: str) -> Path:
         path = self.recorder.out_dir / "shots" / f"{len(self.recorder.shots) + 1:02d}_{name}.png"
