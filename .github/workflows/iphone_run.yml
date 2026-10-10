@@ -30,6 +30,9 @@ jobs:
       APPIUM_DIR: ${{ github.workspace }}/appium
       APPIUM: appium@3.8.0
       XCUITEST: xcuitest@12.16.0
+      AXE_DIR: ${{ github.workspace }}/axe
+      AXE_URL: https://github.com/cameroncooke/AXe/releases/download/v1.8.0/AXe-macOS-v1.8.0-universal.tar.gz
+      AXE_SHA256: 7b76340b72e90d0f211bc7c4636f15009076eff07acef2f2b632b175debd8834
     steps:
       # actions/checkout v7.0.1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -49,6 +52,14 @@ jobs:
         run: |
           python -m venv "$VENV"
           "$VENV/bin/pip" install --quiet --disable-pip-version-check -r runner/requirements.txt
+
+      - name: AXe, the finger that reaches Safari's own gestures (simulator HID touches, not XCTest's)
+        run: |
+          mkdir -p "$AXE_DIR"
+          curl -fsSL "$AXE_URL" -o "$RUNNER_TEMP/axe.tar.gz"
+          echo "$AXE_SHA256  $RUNNER_TEMP/axe.tar.gz" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/axe.tar.gz" -C "$AXE_DIR"
+          echo "$AXE_DIR" >> "$GITHUB_PATH"
 
       - name: Unpack the sealed payload
         env:
