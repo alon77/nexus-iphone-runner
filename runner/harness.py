@@ -12,8 +12,9 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
     viewport()            visual_height, visual_offset_top, inner_height, inner_width, scroll_y
     shot(name)            full-screen simulator screenshot, keyboard included
     js(script)            run JavaScript in the page, `return` hands a value back (document.cookie, input values)
-    edge_swipe(edge, css) an XCTest drag at finger speed from the left or right screen edge, across 70% of the screen,
-                          at the vertical middle of the element — the edge swipe iPhone Safari turns into back/forward
+    swipe(css, from_share, to_share)   a real horizontal finger drag at the vertical middle of the element's visible
+                          part, from/to a share of the screen width (0 = left edge, 1 = right edge) — 0 to 0.7 is
+                          the left-edge swipe iPhone Safari turns into back
     expect(name, condition, detail)   one red/green line in results.json
 
 Appium never leaks into a spec. Once per session, before any spec, keyboard_preflight proves the software
@@ -59,14 +60,11 @@ GONE_ELEMENT_ERROR = "StaleElementReferenceException"
 WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
-SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js", "edge_swipe")
+SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js", "swipe")
 WEB_VIEW_CLASS = "XCUIElementTypeWebView"
-EDGE_START_PT = 0
-EDGE_SWIPE_ACROSS_SHARE = 0.7
-EDGE_PRESS_S = 0
-EDGE_FINGER_PT_PER_S = 900
-EDGE_SWIPE_SETTLE_S = 1.0
-EDGE_DIRECTIONS = {"left": 1, "right": -1}
+SWIPE_PRESS_S = 0
+SWIPE_FINGER_PT_PER_S = 900
+SWIPE_SETTLE_S = 1.0
 VIEWPORT_JS = ("return {visual_height: window.visualViewport.height, visual_offset_top: window.visualViewport.offsetTop,"
                " inner_height: window.innerHeight, inner_width: window.innerWidth, scroll_y: window.scrollY};")
 RECT_JS = ("const element = document.querySelector(arguments[0]); if (!element) return null;"
@@ -258,21 +256,20 @@ class Phone:
     def js(self, script: str):
         return self.driver.execute_script(script)
 
-    def edge_swipe(self, edge: str, css: str):  # kwargs-lint: ignore: spec verb, edge then selector is the spec format
+    def swipe(self, css: str, from_share: float, to_share: float):  # kwargs-lint: ignore: spec verb, selector then span is the spec format
         box = self.rect(css)
         if not box:
-            raise LookupError(f"edge_swipe {css}: no such element")
+            raise LookupError(f"swipe {css}: no such element")
         with self._native():
             web_view = self.driver.find_element(CLASS_NAME, WEB_VIEW_CLASS).rect
-            start_x = EDGE_START_PT if edge == "left" else web_view["width"] - EDGE_START_PT
-            end_x = start_x + EDGE_DIRECTIONS[edge] * web_view["width"] * EDGE_SWIPE_ACROSS_SHARE
+            last_x = web_view["width"] - 1
             visible_top = max(box["top"], 0)
             visible_bottom = min(box["bottom"], web_view["height"])
             y = web_view["y"] + (visible_top + visible_bottom) / 2
             self.driver.execute_script("mobile: dragFromToWithVelocity", {
-                "pressDuration": EDGE_PRESS_S, "holdDuration": EDGE_PRESS_S, "velocity": EDGE_FINGER_PT_PER_S,
-                "fromX": start_x, "fromY": y, "toX": end_x, "toY": y})
-        time.sleep(EDGE_SWIPE_SETTLE_S)
+                "pressDuration": SWIPE_PRESS_S, "holdDuration": SWIPE_PRESS_S, "velocity": SWIPE_FINGER_PT_PER_S,
+                "fromX": round(from_share * last_x), "fromY": y, "toX": round(to_share * last_x), "toY": y})
+        time.sleep(SWIPE_SETTLE_S)
 
     def shot(self, name: str) -> Path:
         path = self.recorder.out_dir / "shots" / f"{len(self.recorder.shots) + 1:02d}_{name}.png"
