@@ -12,6 +12,8 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
     viewport()            visual_height, visual_offset_top, inner_height, inner_width, scroll_y
     shot(name)            full-screen simulator screenshot, keyboard included
     js(script)            run JavaScript in the page, `return` hands a value back (document.cookie, input values)
+    edge_swipe(edge, css) a real finger drag from 2pt inside the left or right screen edge, across 70% of the screen,
+                          at the vertical middle of the element — the edge swipe iPhone Safari turns into back/forward
     expect(name, condition, detail)   one red/green line in results.json
 
 Appium never leaks into a spec. Once per session, before any spec, keyboard_preflight proves the software
@@ -57,7 +59,13 @@ GONE_ELEMENT_ERROR = "StaleElementReferenceException"
 WEB_CONTENT_BUTTONS_CHAIN = "**/XCUIElementTypeWebView/**/XCUIElementTypeButton"
 PROBE_INPUT_ID = "nexus_keyboard_probe"
 KEYBOARD_NOT_SHOWING = "software keyboard not showing"
-SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js")
+SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js", "edge_swipe")
+WEB_VIEW_CLASS = "XCUIElementTypeWebView"
+EDGE_START_PT = 2
+EDGE_SWIPE_ACROSS_SHARE = 0.7
+EDGE_SWIPE_MS = 300
+EDGE_SWIPE_SETTLE_S = 1.0
+EDGE_DIRECTIONS = {"left": 1, "right": -1}
 VIEWPORT_JS = ("return {visual_height: window.visualViewport.height, visual_offset_top: window.visualViewport.offsetTop,"
                " inner_height: window.innerHeight, inner_width: window.innerWidth, scroll_y: window.scrollY};")
 RECT_JS = ("const element = document.querySelector(arguments[0]); if (!element) return null;"
@@ -248,6 +256,25 @@ class Phone:
 
     def js(self, script: str):
         return self.driver.execute_script(script)
+
+    def edge_swipe(self, edge: str, css: str):  # kwargs-lint: ignore: spec verb, edge then selector is the spec format
+        from selenium.webdriver.common.actions import interaction
+        from selenium.webdriver.common.actions.action_builder import ActionBuilder
+        from selenium.webdriver.common.actions.pointer_input import PointerInput
+        box = self.rect(css)
+        if not box:
+            raise LookupError(f"edge_swipe {css}: no such element")
+        with self._native():
+            web_view = self.driver.find_element(CLASS_NAME, WEB_VIEW_CLASS).rect
+            start_x = EDGE_START_PT if edge == "left" else web_view["width"] - EDGE_START_PT
+            end_x = start_x + EDGE_DIRECTIONS[edge] * web_view["width"] * EDGE_SWIPE_ACROSS_SHARE
+            y = web_view["y"] + box["top"] + box["height"] / 2
+            finger = ActionBuilder(self.driver, mouse=PointerInput(interaction.POINTER_TOUCH, "finger"),
+                                   duration=EDGE_SWIPE_MS)
+            finger.pointer_action.move_to_location(int(start_x), int(y)).pointer_down()
+            finger.pointer_action.move_to_location(int(end_x), int(y)).pointer_up()
+            finger.perform()
+        time.sleep(EDGE_SWIPE_SETTLE_S)
 
     def shot(self, name: str) -> Path:
         path = self.recorder.out_dir / "shots" / f"{len(self.recorder.shots) + 1:02d}_{name}.png"
