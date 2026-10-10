@@ -14,8 +14,10 @@ experts/<expert>/tests/iphone/<name>.py whose top-level code calls these names, 
     js(script)            run JavaScript in the page, `return` hands a value back (document.cookie, input values)
     swipe(css, from_share, to_share)   a real horizontal finger drag at the vertical middle of the element's visible
                           part, from/to a share of the screen width (0 = left edge, 1 = right edge) — 0 to 0.7 is
-                          the left-edge swipe iPhone Safari turns into back. The finger is an AXe HID swipe on the
-                          simulator: XCTest's synthesized drags never trigger Safari's back gesture
+                          the left-edge swipe iPhone Safari turns into back. The finger is runner/finger.m, the
+                          Simulator's own touch builder; a drag starting within 20pt of a screen edge carries that
+                          edge's flag, as the iPhone digitizer marks it. XCTest's synthesized drags never trigger
+                          Safari's back gesture
     expect(name, condition, detail)   one red/green line in results.json
 
 Appium never leaks into a spec. Once per session, before any spec, keyboard_preflight proves the software
@@ -65,8 +67,8 @@ KEYBOARD_NOT_SHOWING = "software keyboard not showing"
 SPEC_VERBS = ("open", "tap", "type", "keyboard_up", "dismiss_keyboard", "rect", "viewport", "shot", "js", "swipe")
 WEB_VIEW_CLASS = "XCUIElementTypeWebView"
 SIMULATOR_UDID_ENV = "UDID"
-SWIPE_DURATION_S = 0.3
-AXE_TIMEOUT_S = 30
+FINGER_TIMEOUT_S = 10
+SAFARI_EDGE_ZONE_PT = 20
 SWIPE_SETTLE_S = 1.0
 VIEWPORT_JS = ("return {visual_height: window.visualViewport.height, visual_offset_top: window.visualViewport.offsetTop,"
                " inner_height: window.innerHeight, inner_width: window.innerWidth, scroll_y: window.scrollY};")
@@ -142,6 +144,25 @@ class Recorder:
         passed = bool(expectation.condition)
         self.expects.append({"name": expectation.name, "ok": passed, "detail": str(expectation.detail)})
         return passed
+
+
+@dataclass
+class SwipeLine:
+    start_x: float
+    end_x: float
+    y: float
+    screen: dict
+
+    def edge(self) -> str:
+        if self.start_x <= SAFARI_EDGE_ZONE_PT:
+            return "left"
+        if self.start_x >= self.screen["width"] - SAFARI_EDGE_ZONE_PT:
+            return "right"
+        return "none"
+
+    def screen_shares(self) -> list:
+        width, height = self.screen["width"], self.screen["height"]
+        return [f"{self.start_x / width:.4f}", f"{self.y / height:.4f}", f"{self.end_x / width:.4f}", f"{self.y / height:.4f}"]
 
 
 @dataclass
@@ -260,20 +281,22 @@ class Phone:
         return self.driver.execute_script(script)
 
     def swipe(self, css: str, from_share: float, to_share: float):  # kwargs-lint: ignore: spec verb, selector then span is the spec format
+        line = self._swipe_line(css, (from_share, to_share))
+        subprocess.run(["finger", os.environ[SIMULATOR_UDID_ENV], line.edge(), *line.screen_shares()],
+                       check=True, capture_output=True, text=True, timeout=FINGER_TIMEOUT_S)
+        time.sleep(SWIPE_SETTLE_S)
+
+    def _swipe_line(self, css: str, span: tuple) -> SwipeLine:
         box = self.rect(css)
         if not box:
             raise LookupError(f"swipe {css}: no such element")
         with self._native():
             web_view = self.driver.find_element(CLASS_NAME, WEB_VIEW_CLASS).rect
-            last_x = web_view["width"] - 1
-            visible_top = max(box["top"], 0)
-            visible_bottom = min(box["bottom"], web_view["height"])
-            y = web_view["y"] + (visible_top + visible_bottom) / 2
-        subprocess.run(["axe", "swipe", "--start-x", str(round(from_share * last_x)), "--start-y", str(y),
-                        "--end-x", str(round(to_share * last_x)), "--end-y", str(y),
-                        "--duration", str(SWIPE_DURATION_S), "--udid", os.environ[SIMULATOR_UDID_ENV]],
-                       check=True, capture_output=True, text=True, timeout=AXE_TIMEOUT_S)
-        time.sleep(SWIPE_SETTLE_S)
+            screen = self.driver.get_window_size()
+        last_x = web_view["width"] - 1
+        visible_middle = (max(box["top"], 0) + min(box["bottom"], web_view["height"])) / 2
+        return SwipeLine(start_x=web_view["x"] + span[0] * last_x, end_x=web_view["x"] + span[1] * last_x,
+                         y=web_view["y"] + visible_middle, screen=screen)
 
     def shot(self, name: str) -> Path:
         path = self.recorder.out_dir / "shots" / f"{len(self.recorder.shots) + 1:02d}_{name}.png"
