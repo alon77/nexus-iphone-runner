@@ -23,7 +23,7 @@ jobs:
     env:
       XCODE_APP: /Applications/Xcode_26.2.app
       IOS_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-2
-      DEVICE_TYPE: com.apple.CoreSimulator.SimDeviceType.iPhone-17
+      DEFAULT_DEVICE_TYPE: com.apple.CoreSimulator.SimDeviceType.iPhone-17
       RUN_DIR: ${{ github.workspace }}/iphone_run
       VENV: ${{ github.workspace }}/venv
       PHONE_CACHE: ${{ github.workspace }}/settled_phone
@@ -116,6 +116,7 @@ jobs:
           stamp() { echo "$(date +%T) $1" | tee -a "$RUN_DIR/out/boot_steps.txt"; }
           sudo xcode-select -s "$XCODE_APP"
           defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false
+          stamp "iPhones on this runtime: $("$VENV/bin/python" runner/device_types.py "$IOS_RUNTIME")"
           UDID=$(xcrun simctl create iphone_run "$DEVICE_TYPE" "$IOS_RUNTIME")
           echo "UDID=$UDID" >> "$GITHUB_ENV"
           stamp "created"
